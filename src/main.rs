@@ -45,7 +45,7 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
 
     use sublime::handlers::{
         about, achievements as achievements_handler, commands::Cmd, game::commands as game,
-        kvstore, meme, misc, tiktok,
+        kvstore, meme, misc, rpg, tiktok,
     };
     use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
     use teloxide::dptree::case;
@@ -64,6 +64,9 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         .branch(case![Cmd::Google(_s)].endpoint(misc::google_handler))
         .branch(case![Cmd::Pin].endpoint(misc::pin_handler))
         .branch(case![Cmd::Echo(_s)].endpoint(misc::echo_handler))
+        .branch(case![Cmd::Rpg].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            rpg::rpg_menu_handler(bot, msg, cmd, pool).await
+        }))
         .branch(case![Cmd::Pidorscan(_s)].endpoint(misc::pidorscan_handler))
         .branch(case![Cmd::Get(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             kvstore::get_handler(bot, msg, cmd, pool).await
@@ -132,7 +135,21 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
     let callback_schema = Update::filter_callback_query()
         .branch(
             dptree::filter(|q: &CallbackQuery| {
-                q.data.as_ref().map(|d| d == "meme_en_refresh").unwrap_or(false)
+                q.data
+                    .as_ref()
+                    .map(|d| d.starts_with("rpg:"))
+                    .unwrap_or(false)
+            })
+            .endpoint(|bot: Bot, query: CallbackQuery, pool: PgPool| async move {
+                rpg::rpg_callback_handler(bot, query, pool).await
+            }),
+        )
+        .branch(
+            dptree::filter(|q: &CallbackQuery| {
+                q.data
+                    .as_ref()
+                    .map(|d| d == "meme_en_refresh")
+                    .unwrap_or(false)
             })
             .endpoint(|bot: Bot, query: CallbackQuery| async move {
                 meme::meme_refresh_callback(bot, query).await
@@ -140,7 +157,10 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         )
         .branch(
             dptree::filter(|q: &CallbackQuery| {
-                q.data.as_ref().map(|d| d == "meme_en_save").unwrap_or(false)
+                q.data
+                    .as_ref()
+                    .map(|d| d == "meme_en_save")
+                    .unwrap_or(false)
             })
             .endpoint(|bot: Bot, query: CallbackQuery| async move {
                 meme::meme_save_callback(bot, query).await
@@ -148,7 +168,10 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         )
         .branch(
             dptree::filter(|q: &CallbackQuery| {
-                q.data.as_ref().map(|d| d == "meme_ru_refresh").unwrap_or(false)
+                q.data
+                    .as_ref()
+                    .map(|d| d == "meme_ru_refresh")
+                    .unwrap_or(false)
             })
             .endpoint(|bot: Bot, query: CallbackQuery, config: Config| async move {
                 meme::memeru_refresh_callback(bot, query, config).await
@@ -156,7 +179,10 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         )
         .branch(
             dptree::filter(|q: &CallbackQuery| {
-                q.data.as_ref().map(|d| d == "meme_ru_save").unwrap_or(false)
+                q.data
+                    .as_ref()
+                    .map(|d| d == "meme_ru_save")
+                    .unwrap_or(false)
             })
             .endpoint(|bot: Bot, query: CallbackQuery, config: Config| async move {
                 meme::memeru_save_callback(bot, query, config).await

@@ -27,6 +27,7 @@ sentry = { version = "0.34", optional = true }
 dirs = "5"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
 
 [features]
 default = []

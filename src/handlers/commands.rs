@@ -55,4 +55,6 @@ pub enum Cmd {
     Achievements,
     #[command(description = "scan someone with pidor-detector")]
     Pidorscan(String),
+    #[command(description = "open Pidor-Royale RPG menu")]
+    Rpg,
 }

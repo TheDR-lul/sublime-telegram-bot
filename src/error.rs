@@ -30,4 +30,7 @@ pub enum AppError {
 
     #[error("timeout error: {0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
+
+    #[error("serialization error: {0}")]
+    SerdeJson(#[from] serde_json::Error),
 }
