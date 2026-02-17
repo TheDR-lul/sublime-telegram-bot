@@ -5,3 +5,4 @@ pub mod kvstore;
 pub mod meme;
 pub mod misc;
 pub mod tiktok;
+pub mod achievements;

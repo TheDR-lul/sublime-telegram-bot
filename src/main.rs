@@ -44,7 +44,8 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
     let bot = teloxide::Bot::new(&cfg.telegram_token);
 
     use sublime::handlers::{
-        about, commands::Cmd, game::commands as game, kvstore, meme, misc, tiktok,
+        about, achievements as achievements_handler, commands::Cmd, game::commands as game,
+        kvstore, meme, misc, tiktok,
     };
     use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
     use teloxide::dptree::case;
@@ -63,6 +64,7 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         .branch(case![Cmd::Google(_s)].endpoint(misc::google_handler))
         .branch(case![Cmd::Pin].endpoint(misc::pin_handler))
         .branch(case![Cmd::Echo(_s)].endpoint(misc::echo_handler))
+        .branch(case![Cmd::Pidorscan(_s)].endpoint(misc::pidorscan_handler))
         .branch(case![Cmd::Get(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             kvstore::get_handler(bot, msg, cmd, pool).await
         }))
@@ -93,6 +95,9 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         }))
         .branch(case![Cmd::Pidorme].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidorme_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Achievements].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            achievements_handler::achievements_handler(bot, msg, cmd, pool).await
         }))
         .branch(case![Cmd::Meme].endpoint(|bot: Bot, msg: Message, cmd: Cmd| async move {
             meme::meme_handler(bot, msg, cmd).await
@@ -300,6 +305,8 @@ async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(),
         BotCommand::new("ttvideo", "get video from tiktok"),
         BotCommand::new("ttlink", "get depersonalized tiktok link"),
         BotCommand::new("about", "some info about github repo"),
+        BotCommand::new("achievements", "show your achievements"),
+        BotCommand::new("pidorscan", "scan someone with pidor-detector"),
     ];
     let bot = teloxide::Bot::new(&cfg.telegram_token);
     bot.set_my_commands(commands).await?;

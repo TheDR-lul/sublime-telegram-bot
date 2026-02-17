@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use chrono_tz::Europe::Moscow;
 use rand::seq::SliceRandom;
 use rand::{rngs::StdRng, SeedableRng};
@@ -10,6 +10,7 @@ use teloxide::utils::markdown::escape;
 use crate::db::game;
 use crate::db::models::TgUser;
 use crate::db::user;
+use crate::db::achievements;
 use crate::error::AppError;
 use crate::handlers::game::phrases::{
     stage1, stage2, stage3, stage4, text_static,
@@ -82,10 +83,18 @@ pub async fn pidoreg_handler(
             .await?;
         return Ok(());
     }
-    
     bot.send_message(msg.chat.id, text_static::REGISTRATION_SUCCESS)
         .parse_mode(teloxide::types::ParseMode::MarkdownV2)
         .await?;
+
+    // Achievement: first registration in game.
+    if achievements::grant(&pool, tg_user.id, "first_pidoreg").await? {
+        bot.send_message(
+            msg.chat.id,
+            "🏅 Новая ачивка: Я в деле (первая регистрация в игре).",
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -181,7 +190,59 @@ pub async fn pidor_handler(
     bot.send_message(msg.chat.id, stage4_text)
         .parse_mode(teloxide::types::ParseMode::MarkdownV2)
         .await?;
-    
+
+    // Achievements based on updated stats after today's game.
+    if let Some((_user, count)) = game::stats_personal(&pool, game.id, winner.id).await? {
+        if count == 1 {
+            if achievements::grant(&pool, winner.id, "first_pidor_win").await? {
+                bot.send_message(
+                    msg.chat.id,
+                    "🥇 Новая ачивка: Первый пошёл (первая победа в Пидор Дня).",
+                )
+                .await?;
+            }
+        }
+        if count >= 3 {
+            if achievements::grant(&pool, winner.id, "three_pidor_wins").await? {
+                bot.send_message(
+                    msg.chat.id,
+                    "🏆 Новая ачивка: Почётный пидор чата (3 победы).",
+                )
+                .await?;
+            }
+        }
+    }
+
+    // Achievement: two wins in a row (previous day winner is same user).
+    let prev_dt = current_datetime_moscow() - Duration::days(1);
+    let prev_year = prev_dt.year();
+    let prev_day = prev_dt.ordinal() as i32;
+    if let Some(prev_res) =
+        game::get_today_result(&pool, game.id, prev_year, prev_day).await?
+    {
+        if prev_res.winner_id == winner.id {
+            if achievements::grant(&pool, winner.id, "pidor_series_2").await? {
+                bot.send_message(
+                    msg.chat.id,
+                    "🔥 Новая ачивка: Пидор‑серийник (2 победы подряд).",
+                )
+                .await?;
+            }
+        }
+    }
+
+    // Achievement: night win.
+    let hour = current_dt.hour();
+    if (0..6).contains(&hour) {
+        if achievements::grant(&pool, winner.id, "night_pidor").await? {
+            bot.send_message(
+                msg.chat.id,
+                "🌙 Новая ачивка: Ночной пидор (победа ночью).",
+            )
+            .await?;
+        }
+    }
+
     Ok(())
 }
 

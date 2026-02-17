@@ -3,6 +3,11 @@ use teloxide::types::Message;
 
 use crate::error::AppError;
 
+use rand::seq::SliceRandom;
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use teloxide::types::ParseMode;
+use teloxide::utils::markdown::escape as escape_md2;
+
 pub async fn hello_handler(
     bot: Bot,
     msg: Message,
@@ -29,15 +34,8 @@ fn raw_name_from_msg(msg: &Message) -> String {
 }
 
 /// Escape for MarkdownV2: escape _ * [ ] ( ) ~ ` > # + - = | { } . !
-fn escape_md2(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if matches!(c, '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|' | '{' | '}' | '.' | '!') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
+fn escape_md2_local(s: &str) -> String {
+    escape_md2(s)
 }
 
 pub async fn slap_handler(
@@ -143,6 +141,107 @@ pub async fn echo_handler(
         _ => return Ok(()),
     };
     bot.send_message(msg.chat.id, text).await?;
+    Ok(())
+}
+
+pub async fn pidorscan_handler(
+    bot: Bot,
+    msg: Message,
+    cmd: crate::handlers::commands::Cmd,
+) -> Result<(), AppError> {
+    let target_name = if let Some(reply) = msg.reply_to_message() {
+        reply
+            .from()
+            .map(|u| u.full_name())
+            .unwrap_or_else(|| "кто-то".to_string())
+    } else {
+        match &cmd {
+            crate::handlers::commands::Cmd::Pidorscan(s) if !s.trim().is_empty() => s.trim().to_string(),
+            _ => msg
+                .from()
+                .map(|u| u.full_name())
+                .unwrap_or_else(|| "кто-то".to_string()),
+        }
+    };
+
+    let mut rng = StdRng::from_entropy();
+    let percent: u8 = rng.gen_range(0..=100);
+
+    let intro_templates = vec![
+        "Запускаю пидор-детектор для {}...",
+        "Так, ну-ка подойдите поближе, {}... запускаю сканер.",
+        "Подключаюсь к базам пидоров РФ, {}...",
+        "Включаю режим *глубокого* пидор-сканирования для {}...",
+        "Сканирую аурочку {} на предмет пидорства...",
+    ];
+    let intro_raw = intro_templates
+        .choose(&mut rng)
+        .copied()
+        .unwrap_or("Запускаю пидор-детектор для {}...");
+    let intro = intro_raw.replace("{}", &target_name);
+    bot.send_message(msg.chat.id, intro).await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
+    let analysis_templates = vec![
+        "Анализирую историю сообщений, мемы и карму...",
+        "Считаю количество /pidor и жалоб в чате...",
+        "Смотрю, сколько раз этот персонаж уже оправдывался, что он \"не пидор\"...",
+        "Подгружаю статистику позора из облака...",
+    ];
+    let analysis = analysis_templates
+        .choose(&mut rng)
+        .copied()
+        .unwrap_or("Анализирую историю сообщений, мемы и карму...");
+    bot.send_message(msg.chat.id, analysis).await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(850)).await;
+    let algo_templates = vec![
+        "Почти готово, подрубаю квантовый пидор-алгоритм...",
+        "Сверяю сигнатуру пидора с эталоном Роскомпидора...",
+        "Намешиваю немного машинного обучения и человеческой ненависти...",
+        "Достаю старый добрый аналоговый пидор-детектор из 2016 года...",
+    ];
+    let algo = algo_templates
+        .choose(&mut rng)
+        .copied()
+        .unwrap_or("Почти готово, подрубаю квантовый пидор-алгоритм...");
+    bot.send_message(msg.chat.id, algo).await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+    let name_escaped = escape_md2_local(&target_name);
+
+    let verdict = if percent == 0 {
+        format!(
+            "*Вердикт:* {} вообще не пидор\n_Подозрительно, конечно_",
+            name_escaped
+        )
+    } else if percent < 30 {
+        format!(
+            "*Вердикт:* вероятность, что {} пидор — *{}%*\nПока живи, но мы за тобой следим",
+            name_escaped, percent
+        )
+    } else if percent < 70 {
+        format!(
+            "*Вердикт:* {} пидор на *{}%*\nЕщё чуть-чуть — и мама расстроится",
+            name_escaped, percent
+        )
+    } else if percent < 100 {
+        format!(
+            "*Вердикт:* {} пидор примерно на *{}%*\nЭто уже почти приговор",
+            name_escaped, percent
+        )
+    } else {
+        format!(
+            "*Вердикт:* {} — *100% пидор*\nБез права на обжалование",
+            name_escaped
+        )
+    };
+
+    bot.send_message(msg.chat.id, verdict)
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
+
     Ok(())
 }
 

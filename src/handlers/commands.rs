@@ -51,4 +51,8 @@ pub enum Cmd {
     Ttvideo(String),
     #[command(description = "get depersonalized tiktok link")]
     Ttlink(String),
+    #[command(description = "show your achievements")]
+    Achievements,
+    #[command(description = "scan someone with pidor-detector")]
+    Pidorscan(String),
 }
