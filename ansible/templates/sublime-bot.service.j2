@@ -1,0 +1,20 @@
+[Unit]
+Description=Sublime Telegram Bot
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User={{ bot_user }}
+Group={{ bot_user }}
+WorkingDirectory={{ bot_home }}
+ExecStart={{ bot_binary_path }} run
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables (optional, can use config.toml instead)
+# Environment="RUST_LOG=sublime=info"
+
+[Install]
+WantedBy=multi-user.target

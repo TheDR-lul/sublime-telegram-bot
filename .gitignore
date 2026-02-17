@@ -135,4 +135,7 @@ dmypy.json
 storage
 *.db
 *.session
-*.sql
+
+# Rust / bot config (secrets)
+config.toml
+target/
