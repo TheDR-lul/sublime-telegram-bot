@@ -19,8 +19,9 @@ services:
     container_name: sublime-bot
     restart: unless-stopped
     environment:
-      # Передай токен бота через переменную окружения или .env
-      TELOXIDE_TOKEN: ${TELOXIDE_TOKEN}
+      # Telegram token берётся из config.toml внутри контейнера
+      # или из переменных окружения TELEGRAM_BOT_API_SECRET / TELOXIDE_TOKEN.
+      # Здесь специально не прокидываем TELOXIDE_TOKEN, чтобы не затирать config.toml пустым значением.
       DATABASE_URL: postgres://postgres:postgres@db:5432/sublime_bot
       RUST_LOG: info
     depends_on:

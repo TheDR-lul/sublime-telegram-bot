@@ -3,19 +3,19 @@
 -- Global map: simple 50x50 grid with a few biomes and two settlements.
 DO $$
 DECLARE
-    x INT;
-    y INT;
+    vx INT;
+    vy INT;
 BEGIN
-    FOR x IN 0..49 LOOP
-        FOR y IN 0..49 LOOP
+    FOR vx IN 0..49 LOOP
+        FOR vy IN 0..49 LOOP
             INSERT INTO rpg_map_tile (x, y, biome, min_level, max_level)
             VALUES (
-                x,
-                y,
+                vx,
+                vy,
                 CASE
-                    WHEN x BETWEEN 20 AND 29 AND y BETWEEN 20 AND 29 THEN 'forest'
-                    WHEN x BETWEEN 35 AND 49 AND y BETWEEN 0 AND 9 THEN 'mountain'
-                    WHEN x BETWEEN 0 AND 9 AND y BETWEEN 35 AND 49 THEN 'desert'
+                    WHEN vx BETWEEN 20 AND 29 AND vy BETWEEN 20 AND 29 THEN 'forest'
+                    WHEN vx BETWEEN 35 AND 49 AND vy BETWEEN 0 AND 9 THEN 'mountain'
+                    WHEN vx BETWEEN 0 AND 9 AND vy BETWEEN 35 AND 49 THEN 'desert'
                     ELSE 'plain'
                 END,
                 1,

@@ -18,6 +18,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/sublime /app/sublime
+COPY --from=builder /app/config.toml /app/config.toml
+COPY --from=builder /app/migrations /app/migrations
 
 ENV RUST_LOG=info
 

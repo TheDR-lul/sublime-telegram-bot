@@ -134,7 +134,7 @@ pub async fn rpg_callback_handler(
 
 fn build_main_menu(username: &str, player: &crate::db::rpg::RpgPlayer) -> (String, InlineKeyboardMarkup) {
     let text = format!(
-        "📜 *Pidor-Royale*\n\
+        "📜 *Pidor Royale*\n\
         \n\
         You: *{}*\n\
         Level: *{}*\n\
@@ -519,7 +519,7 @@ async fn handle_inventory_mode(
     let mut text = String::from("*Inventory:*\n\n");
     for entry in entries {
         text.push_str(&format!(
-            "- {} x{} ({})\n",
+            "• {} x{} ({})\n",
             entry.name, entry.quantity, entry.rarity
         ));
     }
@@ -608,7 +608,7 @@ async fn handle_battle_mode(
     if !state.log.is_empty() {
         text.push_str("Log:\n");
         for line in state.log.iter().rev().take(5).rev() {
-            text.push_str(&format!("- {}\n", line));
+            text.push_str(&format!("• {}\n", line));
         }
     }
 
