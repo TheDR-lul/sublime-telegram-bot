@@ -19,10 +19,9 @@ CREATE TABLE IF NOT EXISTS game (
     chat_id  BIGINT NOT NULL UNIQUE
 );
 
--- Registered players in a game (matches gameplayer)
 CREATE TABLE IF NOT EXISTS gameplayer (
     game_id  INTEGER NOT NULL REFERENCES game(id) ON DELETE CASCADE,
-    user_id  INTEGER NOT NULL REFERENCES tg_user(id) ON DELETE CASCADE,
+    user_id  INTEGER NOT NULL REFERENCES tguser(id) ON DELETE CASCADE,
     PRIMARY KEY (game_id, user_id)
 );
 
@@ -30,7 +29,7 @@ CREATE TABLE IF NOT EXISTS gameplayer (
 CREATE TABLE IF NOT EXISTS gameresult (
     id         SERIAL PRIMARY KEY,
     game_id    INTEGER NOT NULL REFERENCES game(id) ON DELETE CASCADE,
-    winner_id  INTEGER NOT NULL REFERENCES tg_user(id),
+    winner_id  INTEGER NOT NULL REFERENCES tguser(id),
     year       INTEGER NOT NULL,
     day        INTEGER NOT NULL
 );
