@@ -1,4 +1,5 @@
 //! Game phrases for pidor draw stages.
+//! Templates use HTML; placeholders like {username} are replaced with html-escaped values.
 
 pub mod stage1 {
     pub const PHRASES: &[&str] = &[
@@ -85,18 +86,19 @@ pub mod stage4 {
     ];
 }
 
+/// HTML templates for game messages. Placeholders: {username}, {year}, {player_stats}, {player_count}, {number}, {amount}, {player_list}.
 pub mod text_static {
-    pub const REGISTRATION_SUCCESS: &str = r#"*OK\!* Ты теперь участвуешь в игре "*Пидор Дня*"\!"#;
-    pub const ERROR_ALREADY_REGISTERED: &str = r"Эй\, ты уже в игре\!";
-    pub const REMOVE_REGISTRATION: &str = r#"*OK\!* Ты больше *не* участвуешь в игре "*Пидор Дня*"\!\n_P\.S\. Но всё равно пидор\!_"#;
-    pub const REMOVE_REGISTRATION_ERROR: &str = r"Ээээ\, тьфу\, ты и так не зарегестрирован\!";
-    pub const CURRENT_DAY_GAME_RESULT: &str = r"Согласно моей информации, по результатам сегодняшнего розыгрыша *пидор дня* \- {username}\!";
-    pub const STATS_ALL_TIME: &str = r"Топ\-10 *пидоров* за все время:\n\n{player_stats}\nВсего участников — {player_count}";
-    pub const STATS_CURRENT_YEAR: &str = r"Топ\-10 *пидоров* за текущий год\:\n\n{player_stats}\nВсего участников — {player_count}";
-    pub const STATS_LIST_ITEM: &str = r"*{number}\.* {username} — {amount} раз\(а\)\n";
-    pub const STATS_PERSONAL: &str = r"{username}, ты был\(а\) *пидором дня* — _{amount}_ раз\!";
-    pub const YEAR_RESULTS_ANNOUNCEMENT: &str = r"Йо-хо-хо\! __С Новым Годом__\! Узнай\, кто же стал пидором {year} года: /pidor{year}";
-    pub const YEAR_RESULTS_MSG: &str = r"*Пидор {year} года* — {username}\!\n\nТоп-50 пидоров за {year} год:\n\n{player_list}\n";
+    pub const REGISTRATION_SUCCESS: &str = "<b>OK!</b> Ты теперь участвуешь в игре \"<b>Пидор Дня</b>\"!";
+    pub const ERROR_ALREADY_REGISTERED: &str = "Эй, ты уже в игре!";
+    pub const REMOVE_REGISTRATION: &str = "<b>OK!</b> Ты больше <b>не</b> участвуешь в игре \"<b>Пидор Дня</b>\"!\n<i>P.S. Но всё равно пидор!</i>";
+    pub const REMOVE_REGISTRATION_ERROR: &str = "Ээээ, тьфу, ты и так не зарегестрирован!";
+    pub const CURRENT_DAY_GAME_RESULT: &str = "Согласно моей информации, по результатам сегодняшнего розыгрыша <b>пидор дня</b> — {username}!";
+    pub const STATS_ALL_TIME: &str = "Топ-10 <b>пидоров</b> за все время:\n\n{player_stats}\nВсего участников — {player_count}";
+    pub const STATS_CURRENT_YEAR: &str = "Топ-10 <b>пидоров</b> за текущий год:\n\n{player_stats}\nВсего участников — {player_count}";
+    pub const STATS_LIST_ITEM: &str = "<b>{number}.</b> {username} — {amount} раз(а)\n";
+    pub const STATS_PERSONAL: &str = "{username}, ты был(а) <b>пидором дня</b> — <i>{amount}</i> раз!";
+    pub const YEAR_RESULTS_ANNOUNCEMENT: &str = "Йо-хо-хо! <b>С Новым Годом</b>! Узнай, кто же стал пидором {year} года: /pidor{year}";
+    pub const YEAR_RESULTS_MSG: &str = "<b>Пидор {year} года</b> — {username}!\n\nТоп-50 пидоров за {year} год:\n\n{player_list}\n";
     pub const ERROR_NOT_ENOUGH_PLAYERS: &str = "Нужно как минимум два игрока, чтобы начать игру! Зарегистрируйся используя /pidoreg";
     pub const ERROR_ZERO_PLAYERS: &str = "Зарегистрированных в игру еще нет, а значит пидор ты - {username}!";
 }

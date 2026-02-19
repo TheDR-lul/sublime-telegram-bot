@@ -1,4 +1,5 @@
 use teloxide::prelude::*;
+use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::Message;
 
 use crate::error::AppError;
@@ -13,7 +14,7 @@ pub async fn about_handler(
         "The source code of the bot available via <a href=\"https://github.com/TheDR-lul/sublime\">GitHub repository</a>",
     )
     .parse_mode(teloxide::types::ParseMode::Html)
-    .disable_web_page_preview(true)
+    .disable_link_preview(true)
     .await?;
     Ok(())
 }

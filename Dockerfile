@@ -7,7 +7,7 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release || true
 
-# Build real binary
+# Build real binary (use --no-cache when switching branches or after code fixes)
 COPY . .
 RUN cargo build --release
 

@@ -2,7 +2,7 @@ use chrono::{DateTime, Local};
 use sqlx::PgPool;
 use teloxide::prelude::*;
 use teloxide::types::{Message, ParseMode};
-use teloxide::utils::markdown::escape as escape_md2;
+use teloxide::utils::html::escape as escape_html;
 
 use crate::db;
 use crate::error::AppError;
@@ -29,7 +29,7 @@ pub async fn achievements_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
-    let from_user = match msg.from() {
+    let from_user = match msg.from.as_ref() {
         Some(u) => u,
         None => {
             bot.send_message(msg.chat.id, "Cannot show achievements for anonymous user.")
@@ -47,16 +47,15 @@ pub async fn achievements_handler(
         return Ok(());
     }
 
-    let mut text = String::from("*Твои ачивки:*\n");
+    let mut text = String::from("<b>Твои ачивки:</b>\n");
     for a in list {
-        let title = escape_md2(code_to_title(&a.code));
-        let when = escape_md2(&format_time(&a.earned_at));
-        text.push_str(&format!("• *{}* — _{}_\n", title, when));
+        let title = escape_html(code_to_title(&a.code));
+        let when = escape_html(&format_time(&a.earned_at));
+        text.push_str(&format!("• <b>{}</b> — <i>{}</i>\n", title, when));
     }
 
     bot.send_message(msg.chat.id, text)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
     Ok(())
 }
-

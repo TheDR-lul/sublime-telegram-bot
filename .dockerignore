@@ -1,0 +1,22 @@
+# Build artifacts (huge, rebuilt inside container anyway)
+target/
+
+# Git
+.git/
+.gitignore
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docs and misc (not needed in image)
+*.md
+!README.md
+.cursor/
+terminals/
+
+# Local config override (use COPY in Dockerfile or mount at run)
+# config.toml is copied; keep in context if you want it in image

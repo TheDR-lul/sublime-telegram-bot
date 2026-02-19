@@ -3,8 +3,10 @@
 use sqlx::{PgPool, Row};
 use teloxide::prelude::*;
 use teloxide::types::{
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, MaybeInaccessibleMessage,
+    ParseMode,
 };
+use teloxide::utils::html::escape as escape_html;
 
 use crate::db;
 use crate::error::AppError;
@@ -19,7 +21,7 @@ pub async fn rpg_menu_handler(
 ) -> Result<(), AppError> {
     let chat_id = msg.chat.id;
 
-    let from_user = match msg.from() {
+    let from_user = match msg.from.as_ref() {
         Some(u) => u,
         None => {
             bot.send_message(chat_id, "Cannot start RPG for anonymous message.")
@@ -42,7 +44,7 @@ pub async fn rpg_menu_handler(
                 text.clone(),
             )
             .reply_markup(keyboard.clone())
-            .parse_mode(ParseMode::MarkdownV2)
+            .parse_mode(ParseMode::Html)
             .await
         {
             Ok(_) => state.message_id,
@@ -50,7 +52,7 @@ pub async fn rpg_menu_handler(
                 let m = bot
                     .send_message(chat_id, text)
                     .reply_markup(keyboard)
-                    .parse_mode(ParseMode::MarkdownV2)
+                    .parse_mode(ParseMode::Html)
                     .await?;
                 m.id.0 as i64
             }
@@ -59,7 +61,7 @@ pub async fn rpg_menu_handler(
         let m = bot
             .send_message(chat_id, text)
             .reply_markup(keyboard)
-            .parse_mode(ParseMode::MarkdownV2)
+            .parse_mode(ParseMode::Html)
             .await?;
         m.id.0 as i64
     };
@@ -88,9 +90,9 @@ pub async fn rpg_callback_handler(
     let action = parts.get(2).copied().unwrap_or_default();
     let extra = parts.get(3).copied().unwrap_or_default();
 
-    let message = match q.message {
-        Some(ref m) => m,
-        None => return Ok(()),
+    let message = match &q.message {
+        Some(MaybeInaccessibleMessage::Regular(m)) => m.as_ref(),
+        _ => return Ok(()),
     };
 
     let chat_id = message.chat.id;
@@ -123,7 +125,7 @@ pub async fn rpg_callback_handler(
             let (text, keyboard) = build_main_menu(&tg_user.full_username(false), &player);
             bot.edit_message_text(chat_id, message.id, text)
                 .reply_markup(keyboard)
-                .parse_mode(ParseMode::MarkdownV2)
+                .parse_mode(ParseMode::Html)
                 .await?;
         }
         _ => {}
@@ -133,16 +135,17 @@ pub async fn rpg_callback_handler(
 }
 
 fn build_main_menu(username: &str, player: &crate::db::rpg::RpgPlayer) -> (String, InlineKeyboardMarkup) {
+    let username_esc = escape_html(username);
     let text = format!(
-        "📜 *Pidor Royale*\n\
+        "📜 <b>Pidor Royale</b>\n\
         \n\
-        You: *{}*\n\
-        Level: *{}*\n\
-        HP: *{}/{}*\n\
+        You: <b>{}</b>\n\
+        Level: <b>{}</b>\n\
+        HP: <b>{}/{}</b>\n\
         Stats: STR {} / AGI {} / INT {} / VIT {} / LUCK {}\n\
         \n\
         Use buttons below to open profile, world map, inventory and other RPG features.",
-        username,
+        username_esc,
         player.level,
         player.hp_current,
         player.hp_max,
@@ -178,18 +181,19 @@ async fn handle_profile_mode(
     username: &str,
     player: &crate::db::rpg::RpgPlayer,
 ) -> Result<(), AppError> {
+    let username_esc = escape_html(username);
     let text = format!(
-        "*RPG profile*\n\
+        "<b>RPG profile</b>\n\
         \n\
-        Player: *{}*\n\
-        Level: *{}*\n\
-        XP: *{} / {}*\n\
-        HP: *{}/{}*\n\
+        Player: <b>{}</b>\n\
+        Level: <b>{}</b>\n\
+        XP: <b>{} / {}</b>\n\
+        HP: <b>{}/{}</b>\n\
         Position: ({}, {})\n\
         \n\
         Stats:\n\
         STR {} / AGI {} / INT {} / VIT {} / LUCK {}",
-        username,
+        username_esc,
         player.level,
         player.xp,
         player.xp_to_next,
@@ -211,7 +215,7 @@ async fn handle_profile_mode(
 
     bot.edit_message_text(chat_id, message.id, text)
         .reply_markup(keyboard)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -228,32 +232,29 @@ async fn handle_world_mode(
 ) -> Result<(), AppError> {
     let mut player = player.clone();
 
-    match action {
-        "move" => {
-            let (dx, dy) = match extra {
-                "N" => (0, -1),
-                "S" => (0, 1),
-                "W" => (-1, 0),
-                "E" => (1, 0),
-                _ => (0, 0),
-            };
-            player.pos_x += dx;
-            player.pos_y += dy;
+    if action == "move" {
+        let (dx, dy) = match extra {
+            "N" => (0, -1),
+            "S" => (0, 1),
+            "W" => (-1, 0),
+            "E" => (1, 0),
+            _ => (0, 0),
+        };
+        player.pos_x += dx;
+        player.pos_y += dy;
 
-            sqlx::query(
-                r#"
-                UPDATE rpg_player
-                SET pos_x = $1, pos_y = $2
-                WHERE id = $3
-                "#,
-            )
-            .bind(player.pos_x)
-            .bind(player.pos_y)
-            .bind(player.id)
-            .execute(pool)
-            .await?;
-        }
-        "open" | _ => {}
+        sqlx::query(
+            r#"
+            UPDATE rpg_player
+            SET pos_x = $1, pos_y = $2
+            WHERE id = $3
+            "#,
+        )
+        .bind(player.pos_x)
+        .bind(player.pos_y)
+        .bind(player.id)
+        .execute(pool)
+        .await?;
     }
 
     // Check current tile for special biomes (city / village / raid zones).
@@ -280,9 +281,10 @@ async fn handle_world_mode(
         db::rpg::load_map_window(pool, player.pos_x, player.pos_y, radius).await?;
     let map_text = render_map_window(&tiles, player.pos_x, player.pos_y, radius);
 
+    let map_esc = escape_html(&map_text);
     let text = format!(
-        "*World map*\n\n{}\n\nPosition: ({}, {})",
-        map_text, player.pos_x, player.pos_y
+        "<b>World map</b>\n\n{}\n\nPosition: ({}, {})",
+        map_esc, player.pos_x, player.pos_y
     );
 
     let keyboard = InlineKeyboardMarkup::new(vec![
@@ -300,7 +302,7 @@ async fn handle_world_mode(
 
     bot.edit_message_text(chat_id, message.id, text)
         .reply_markup(keyboard)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -319,7 +321,7 @@ async fn handle_city_mode(
         None => {
             // Fallback: show simple text if city has no detailed data.
             let text = format!(
-                "*City*\n\nYou are in a settlement at ({}, {}).\nNo detailed layout is defined yet.",
+                "<b>City</b>\n\nYou are in a settlement at ({}, {}).\nNo detailed layout is defined yet.",
                 player.pos_x, player.pos_y
             );
             let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
@@ -328,7 +330,7 @@ async fn handle_city_mode(
             )]]);
             bot.edit_message_text(chat_id, message.id, text)
                 .reply_markup(keyboard)
-                .parse_mode(ParseMode::MarkdownV2)
+                .parse_mode(ParseMode::Html)
                 .await?;
             return Ok(());
         }
@@ -349,33 +351,34 @@ async fn handle_city_mode(
         let name: String = city.get("name");
         let description: String = city.get("description");
         let text = format!(
-            "*{}*\n\n{}\n\nAvailable buildings:",
-            name, description
+            "<b>{}</b>\n\n{}\n\nAvailable buildings:",
+            escape_html(&name), escape_html(&description)
         );
 
-        let mut rows = Vec::new();
-        rows.push(vec![
-            InlineKeyboardButton::callback("🏪 Shop", "rpg:building:open:shop_general"),
-            InlineKeyboardButton::callback("🏰 Guild hall", "rpg:building:open:guild_house_main"),
-        ]);
-        rows.push(vec![
-            InlineKeyboardButton::callback("⚔ Arena", "rpg:building:open:arena_local"),
-            InlineKeyboardButton::callback("🍺 Tavern", "rpg:building:open:tavern_main"),
-        ]);
-        rows.push(vec![InlineKeyboardButton::callback(
-            "⬅ Back to world",
-            "rpg:world:open",
-        )]);
+        let rows = vec![
+            vec![
+                InlineKeyboardButton::callback("🏪 Shop", "rpg:building:open:shop_general"),
+                InlineKeyboardButton::callback("🏰 Guild hall", "rpg:building:open:guild_house_main"),
+            ],
+            vec![
+                InlineKeyboardButton::callback("⚔ Arena", "rpg:building:open:arena_local"),
+                InlineKeyboardButton::callback("🍺 Tavern", "rpg:building:open:tavern_main"),
+            ],
+            vec![InlineKeyboardButton::callback(
+                "⬅ Back to world",
+                "rpg:world:open",
+            )],
+        ];
 
         let keyboard = InlineKeyboardMarkup::new(rows);
 
         bot.edit_message_text(chat_id, message.id, text)
             .reply_markup(keyboard)
-            .parse_mode(ParseMode::MarkdownV2)
+            .parse_mode(ParseMode::Html)
             .await?;
     } else {
         let text = format!(
-            "*Settlement*\n\nYou are in a settlement at ({}, {}).",
+            "<b>Settlement</b>\n\nYou are in a settlement at ({}, {}).",
             player.pos_x, player.pos_y
         );
         let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
@@ -384,7 +387,7 @@ async fn handle_city_mode(
         )]]);
         bot.edit_message_text(chat_id, message.id, text)
             .reply_markup(keyboard)
-            .parse_mode(ParseMode::MarkdownV2)
+            .parse_mode(ParseMode::Html)
             .await?;
     }
 
@@ -395,13 +398,13 @@ async fn handle_special_zone_mode(
     bot: &Bot,
     chat_id: ChatId,
     message: &Message,
-    player: &crate::db::rpg::RpgPlayer,
+    _player: &crate::db::rpg::RpgPlayer,
     tile: &crate::db::rpg::RpgMapTile,
 ) -> Result<(), AppError> {
     let text = match tile.biome.as_str() {
-        "raid_zone" => "*Raid zone*\n\nThis area is reserved for future guild raids.",
-        "world_boss" => "*World boss area*\n\nThis area will host world bosses for multiple guilds.",
-        _ => "*Special zone*",
+        "raid_zone" => "<b>Raid zone</b>\n\nThis area is reserved for future guild raids.",
+        "world_boss" => "<b>World boss area</b>\n\nThis area will host world bosses for multiple guilds.",
+        _ => "<b>Special zone</b>",
     };
 
     let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
@@ -409,9 +412,9 @@ async fn handle_special_zone_mode(
         "rpg:world:open",
     )]]);
 
-    bot.edit_message_text(chat_id, message.id, text.to_string())
+    bot.edit_message_text(chat_id, message.id, text)
         .reply_markup(keyboard)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -421,7 +424,7 @@ async fn handle_building_mode(
     bot: &Bot,
     chat_id: ChatId,
     message: &Message,
-    action: &str,
+    _action: &str,
     building_code: &str,
 ) -> Result<(), AppError> {
     let title = match building_code {
@@ -440,7 +443,7 @@ async fn handle_building_mode(
         _ => "This building does not have detailed logic yet.",
     };
 
-    let text = format!("*{}*\n\n{}", title, description);
+    let text = format!("<b>{}</b>\n\n{}", escape_html(title), escape_html(description));
 
     let back_target = if building_code.starts_with("guild_house") {
         "rpg:guild:open"
@@ -455,7 +458,7 @@ async fn handle_building_mode(
 
     bot.edit_message_text(chat_id, message.id, text)
         .reply_markup(keyboard)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -504,23 +507,23 @@ async fn handle_inventory_mode(
     let entries = db::rpg::list_inventory(pool, player.id).await?;
 
     if entries.is_empty() {
-        let text = "*Inventory is empty*".to_string();
+        let text = "<b>Inventory is empty</b>".to_string();
         let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
             "⬅ Back",
             "rpg:main:open",
         )]]);
         bot.edit_message_text(chat_id, message.id, text)
             .reply_markup(keyboard)
-            .parse_mode(ParseMode::MarkdownV2)
+            .parse_mode(ParseMode::Html)
             .await?;
         return Ok(());
     }
 
-    let mut text = String::from("*Inventory:*\n\n");
+    let mut text = String::from("<b>Inventory:</b>\n\n");
     for entry in entries {
         text.push_str(&format!(
             "• {} x{} ({})\n",
-            entry.name, entry.quantity, entry.rarity
+            escape_html(&entry.name), entry.quantity, escape_html(&entry.rarity)
         ));
     }
 
@@ -531,7 +534,7 @@ async fn handle_inventory_mode(
 
     bot.edit_message_text(chat_id, message.id, text)
         .reply_markup(keyboard)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -542,8 +545,10 @@ async fn handle_guild_placeholder(
     chat_id: ChatId,
     message: &Message,
 ) -> Result<(), AppError> {
-    let text =
-        "*Guilds are not implemented yet in this MVP. Stay tuned!*".to_string();
+    let text = format!(
+        "<b>{}</b>",
+        escape_html("Guilds are not implemented yet in this MVP. Stay tuned!")
+    );
 
     let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
         "⬅ Back",
@@ -552,7 +557,7 @@ async fn handle_guild_placeholder(
 
     bot.edit_message_text(chat_id, message.id, text)
         .reply_markup(keyboard)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -603,12 +608,12 @@ async fn handle_battle_mode(
 
     db::rpg::update_battle_state(pool, battle.id, &state, status).await?;
 
-    let mut text = String::from("*Training battle*\n\n");
+    let mut text = String::from("<b>Training battle</b>\n\n");
     text.push_str(&format!("Your HP: {}\nEnemy HP: {}\n\n", state.player.hp, state.enemy.hp));
     if !state.log.is_empty() {
         text.push_str("Log:\n");
         for line in state.log.iter().rev().take(5).rev() {
-            text.push_str(&format!("• {}\n", line));
+            text.push_str(&format!("• {}\n", escape_html(line)));
         }
     }
 
@@ -632,7 +637,7 @@ async fn handle_battle_mode(
 
     bot.edit_message_text(chat_id, message.id, text)
         .reply_markup(keyboard)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())

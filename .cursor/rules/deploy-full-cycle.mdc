@@ -1,0 +1,22 @@
+---
+description: Complete deployment cycle for sublime bot (build, Docker, container restart)
+globs: src/**/*.rs, Dockerfile, Cargo.toml
+alwaysApply: false
+---
+
+# Deploy full cycle
+
+When you change bot code, config, or Dockerfile in this project, **always run the full deployment to the end**. Do not stop at "fix applied" or "run these commands yourself".
+
+## Required steps (in order)
+
+1. **Build** – `cargo build --release` (or `cargo build` for quick check).
+2. **Docker** – `docker build --no-cache -t sublime-bot:latest .` from project root.
+3. **Restart container** – stop/remove old container, then start new one with same env and network:
+   - `docker stop sublime-bot; docker rm sublime-bot`
+   - `docker run -d --name sublime-bot --network sublime_default -e DATABASE_URL=postgres://postgres:postgres@db:5432/sublime_bot -e RUST_LOG=info sublime-bot:latest`
+4. **Verify** – `docker ps --filter name=sublime-bot` and `docker logs sublime-bot --tail 10`.
+
+If docker-compose is used instead, run `docker compose build --no-cache` and `docker compose up -d --force-recreate`.
+
+Do not wait for user feedback before running these steps; execute them as part of the same task.

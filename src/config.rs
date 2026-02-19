@@ -76,10 +76,10 @@ impl Config {
         if let Ok(s) = std::env::var("SENTRY_DSN") {
             c.sentry_dsn = Some(s);
         }
-        if let Ok(id) = std::env::var("TIKTOK_CACHE_CHAT_ID") {
-            if let Ok(n) = id.parse() {
-                c.tiktok_cache_chat_id = Some(n);
-            }
+        if let Ok(id) = std::env::var("TIKTOK_CACHE_CHAT_ID")
+            && let Ok(n) = id.parse()
+        {
+            c.tiktok_cache_chat_id = Some(n);
         }
 
         Ok(c)

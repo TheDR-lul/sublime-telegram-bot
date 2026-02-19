@@ -76,7 +76,7 @@ pub async fn set_handler(
     };
     let chat_id = msg.chat.id.0;
     kv::set(&pool, chat_id, key, value).await?;
-    bot.send_message(msg.chat.id, &format!("Key {} successfully added", key))
+    bot.send_message(msg.chat.id, format!("Key {} successfully added", key))
         .await?;
     Ok(())
 }
@@ -97,7 +97,7 @@ pub async fn del_handler(
     }
     let chat_id = msg.chat.id.0;
     if kv::del(&pool, chat_id, key).await? {
-        bot.send_message(msg.chat.id, &format!("OK! Key {} successfully deleted", key))
+        bot.send_message(msg.chat.id, format!("OK! Key {} successfully deleted", key))
             .await?;
     } else {
         bot.send_message(msg.chat.id, "no such key").await?;

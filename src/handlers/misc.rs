@@ -1,12 +1,12 @@
 use teloxide::prelude::*;
+use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::Message;
 
 use crate::error::AppError;
 
-use rand::seq::SliceRandom;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::prelude::*;
 use teloxide::types::ParseMode;
-use teloxide::utils::markdown::escape as escape_md2;
+use teloxide::utils::html::escape as escape_html;
 
 pub async fn hello_handler(
     bot: Bot,
@@ -14,7 +14,8 @@ pub async fn hello_handler(
     _: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
     let name = msg
-        .from()
+        .from
+        .as_ref()
         .map(|u| u.first_name.as_str())
         .unwrap_or("there");
     bot.send_message(msg.chat.id, format!("Hello, {}!", name))
@@ -23,7 +24,8 @@ pub async fn hello_handler(
 }
 
 fn raw_name_from_msg(msg: &Message) -> String {
-    msg.from()
+    msg.from
+        .as_ref()
         .map(|u| {
             u.username
                 .as_deref()
@@ -33,24 +35,19 @@ fn raw_name_from_msg(msg: &Message) -> String {
         .unwrap_or_else(|| "someone".to_string())
 }
 
-/// Escape for MarkdownV2: escape _ * [ ] ( ) ~ ` > # + - = | { } . !
-fn escape_md2_local(s: &str) -> String {
-    escape_md2(s)
-}
-
 pub async fn slap_handler(
     bot: Bot,
     msg: Message,
     cmd: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
-    let who = raw_name_from_msg(&msg);
+    let who = escape_html(&raw_name_from_msg(&msg));
     let target = match &cmd {
-        crate::handlers::commands::Cmd::Slap(s) => escape_md2(s),
+        crate::handlers::commands::Cmd::Slap(s) => escape_html(s),
         _ => "void".to_string(),
     };
-    let text = format!(r"\*{}* slaps _{}_ around a bit with a large trout", who, target);
+    let text = format!("<b>{}</b> slaps <i>{}</i> around a bit with a large trout", who, target);
     bot.send_message(msg.chat.id, text)
-        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
     Ok(())
 }
@@ -69,18 +66,18 @@ pub async fn me_handler(
     msg: Message,
     cmd: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
-    let who = raw_name_from_msg(&msg);
+    let who = escape_html(&raw_name_from_msg(&msg));
     let text = match &cmd {
         crate::handlers::commands::Cmd::Me(s) => {
             if s.is_empty() {
                 return Ok(());
             }
-            format!(r"\*{}* {}", who, escape_md2(s))
+            format!("<b>{}</b> {}", who, escape_html(s))
         }
         _ => return Ok(()),
     };
     bot.send_message(msg.chat.id, text)
-        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
     Ok(())
 }
@@ -101,7 +98,7 @@ pub async fn google_handler(
     }
     let url = format!("https://lmgtfy.com/?q={}", url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>());
     bot.send_message(msg.chat.id, url)
-        .disable_web_page_preview(true)
+        .disable_link_preview(true)
         .await?;
     Ok(())
 }
@@ -121,8 +118,8 @@ pub async fn pin_handler(
             }
         }
     } else {
-        bot.send_message(msg.chat.id, r"reply to message you want to _pin_")
-            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        bot.send_message(msg.chat.id, "reply to message you want to <i>pin</i>")
+            .parse_mode(ParseMode::Html)
             .await?;
     }
     Ok(())
@@ -135,7 +132,7 @@ pub async fn echo_handler(
 ) -> Result<(), AppError> {
     let text = match &cmd {
         crate::handlers::commands::Cmd::Echo(s) => {
-            let name = msg.from().map(|u| u.full_name()).unwrap_or_else(|| "someone".to_string());
+            let name = msg.from.as_ref().map(|u| u.full_name()).unwrap_or_else(|| "someone".to_string());
             format!("{} said {}", name, s)
         }
         _ => return Ok(()),
@@ -151,23 +148,25 @@ pub async fn pidorscan_handler(
 ) -> Result<(), AppError> {
     let target_name = if let Some(reply) = msg.reply_to_message() {
         reply
-            .from()
+            .from
+            .as_ref()
             .map(|u| u.full_name())
             .unwrap_or_else(|| "кто-то".to_string())
     } else {
         match &cmd {
             crate::handlers::commands::Cmd::Pidorscan(s) if !s.trim().is_empty() => s.trim().to_string(),
             _ => msg
-                .from()
+                .from
+                .as_ref()
                 .map(|u| u.full_name())
                 .unwrap_or_else(|| "кто-то".to_string()),
         }
     };
 
-    let mut rng = StdRng::from_entropy();
-    let percent: u8 = rng.gen_range(0..=100);
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+    let percent: u8 = rng.random_range(0..=100);
 
-    let intro_templates = vec![
+    let intro_templates = [
         "Запускаю пидор-детектор для {}...",
         "Так, ну-ка подойдите поближе, {}... запускаю сканер.",
         "Подключаюсь к базам пидоров РФ, {}...",
@@ -182,7 +181,7 @@ pub async fn pidorscan_handler(
     bot.send_message(msg.chat.id, intro).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
-    let analysis_templates = vec![
+    let analysis_templates = [
         "Анализирую историю сообщений, мемы и карму...",
         "Считаю количество /pidor и жалоб в чате...",
         "Смотрю, сколько раз этот персонаж уже оправдывался, что он \"не пидор\"...",
@@ -195,7 +194,7 @@ pub async fn pidorscan_handler(
     bot.send_message(msg.chat.id, analysis).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(850)).await;
-    let algo_templates = vec![
+    let algo_templates = [
         "Почти готово, подрубаю квантовый пидор-алгоритм...",
         "Сверяю сигнатуру пидора с эталоном Роскомпидора...",
         "Намешиваю немного машинного обучения и человеческой ненависти...",
@@ -209,37 +208,37 @@ pub async fn pidorscan_handler(
 
     tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
 
-    let name_escaped = escape_md2_local(&target_name);
+    let name_escaped = escape_html(&target_name);
 
     let verdict = if percent == 0 {
         format!(
-            "*Вердикт:* {} вообще не пидор\n_Подозрительно, конечно_",
+            "<b>Вердикт:</b> {} вообще не пидор\n<i>Подозрительно, конечно</i>",
             name_escaped
         )
     } else if percent < 30 {
         format!(
-            "*Вердикт:* вероятность, что {} пидор — *{}%*\nПока живи, но мы за тобой следим",
+            "<b>Вердикт:</b> вероятность, что {} пидор — <b>{}%</b>\nПока живи, но мы за тобой следим",
             name_escaped, percent
         )
     } else if percent < 70 {
         format!(
-            "*Вердикт:* {} пидор на *{}%*\nЕщё чуть-чуть — и мама расстроится",
+            "<b>Вердикт:</b> {} пидор на <b>{}%</b>\nЕщё чуть-чуть — и мама расстроится",
             name_escaped, percent
         )
     } else if percent < 100 {
         format!(
-            "*Вердикт:* {} пидор примерно на *{}%*\nЭто уже почти приговор",
+            "<b>Вердикт:</b> {} пидор примерно на <b>{}%</b>\nЭто уже почти приговор",
             name_escaped, percent
         )
     } else {
         format!(
-            "*Вердикт:* {} — *100% пидор*\nБез права на обжалование",
+            "<b>Вердикт:</b> {} — <b>100% пидор</b>\nБез права на обжалование",
             name_escaped
         )
     };
 
     bot.send_message(msg.chat.id, verdict)
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -254,8 +253,7 @@ pub async fn inline_handler(
         return Ok(());
     }
 
-    use rand::seq::SliceRandom;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::prelude::*;
     use teloxide::types::{InlineQueryResult, InlineQueryResultArticle, InputMessageContent, InputMessageContentText};
 
     let mut shuffled = Vec::new();
@@ -265,7 +263,7 @@ pub async fn inline_handler(
             let mut chars: Vec<char> = word.chars().collect();
             let first = chars.remove(0);
             let last = chars.pop().unwrap();
-            let mut rng = StdRng::from_entropy();
+            let mut rng = rand::make_rng::<rand::rngs::StdRng>();
             chars.shuffle(&mut rng);
             shuffled.push(format!("{}{}{}", first, chars.iter().collect::<String>(), last));
         } else {
@@ -282,14 +280,13 @@ pub async fn inline_handler(
                 message_text: q.to_string(),
                 parse_mode: None,
                 entities: None,
-                disable_web_page_preview: None,
+                link_preview_options: None,
             }),
             reply_markup: None,
             url: None,
-            hide_url: None,
-            thumb_url: None,
-            thumb_width: None,
-            thumb_height: None,
+            thumbnail_url: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
         }),
         InlineQueryResult::Article(InlineQueryResultArticle {
             id: uuid::Uuid::new_v4().to_string(),
@@ -299,14 +296,13 @@ pub async fn inline_handler(
                 message_text: q.to_uppercase(),
                 parse_mode: None,
                 entities: None,
-                disable_web_page_preview: None,
+                link_preview_options: None,
             }),
             reply_markup: None,
             url: None,
-            hide_url: None,
-            thumb_url: None,
-            thumb_width: None,
-            thumb_height: None,
+            thumbnail_url: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
         }),
         InlineQueryResult::Article(InlineQueryResultArticle {
             id: uuid::Uuid::new_v4().to_string(),
@@ -316,17 +312,16 @@ pub async fn inline_handler(
                 message_text: shuffled.join(""),
                 parse_mode: None,
                 entities: None,
-                disable_web_page_preview: None,
+                link_preview_options: None,
             }),
             reply_markup: None,
             url: None,
-            hide_url: None,
-            thumb_url: None,
-            thumb_width: None,
-            thumb_height: None,
+            thumbnail_url: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
         }),
     ];
 
-    bot.answer_inline_query(&query.id, results).cache_time(0).await?;
+    bot.answer_inline_query(query.id, results).cache_time(0).await?;
     Ok(())
 }

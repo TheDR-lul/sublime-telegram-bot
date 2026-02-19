@@ -185,12 +185,12 @@ pub async fn tt_inline_handler(
         let (link, video_bytes) = match get_tt_video_info(q, true).await {
             Ok((l, Some(bytes))) => (l, bytes),
             Ok((_l, None)) => {
-                bot.answer_inline_query(&query.id, vec![]).await?;
+                bot.answer_inline_query(query.id.clone(), vec![]).await?;
                 return Ok(());
             }
             Err(e) => {
                 tracing::warn!("TikTok inline download failed: {:?}", e);
-                bot.answer_inline_query(&query.id, vec![]).await?;
+                bot.answer_inline_query(query.id.clone(), vec![]).await?;
                 return Ok(());
             }
         };
@@ -214,7 +214,8 @@ pub async fn tt_inline_handler(
             .id
             .clone();
 
-        let cached = tiktok::insert(&pool, &link, Some(q), &file_id).await?;
+        let file_id_str = file_id.to_string();
+        let cached = tiktok::insert(&pool, &link, Some(q), &file_id_str).await?;
         (cached.link, cached.telegram_message_id)
     };
 
@@ -232,18 +233,17 @@ pub async fn tt_inline_handler(
                 message_text: video_link.clone(),
                 parse_mode: None,
                 entities: None,
-                disable_web_page_preview: None,
+                link_preview_options: None,
             }),
             reply_markup: None,
             url: None,
-            hide_url: None,
-            thumb_url: None,
-            thumb_width: None,
-            thumb_height: None,
+            thumbnail_url: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
         }),
         InlineQueryResult::CachedVideo(InlineQueryResultCachedVideo {
             id: uuid::Uuid::new_v4().to_string(),
-            video_file_id: telegram_video_id.clone(),
+            video_file_id: telegram_video_id.clone().into(),
             title: "Video".to_string(),
             description: None,
             caption: None,
@@ -253,10 +253,11 @@ pub async fn tt_inline_handler(
                 InlineKeyboardButton::url("🔗".to_string(), url::Url::parse(&video_link)?),
             ]])),
             input_message_content: None,
+            show_caption_above_media: false,
         }),
     ];
 
-    match bot.answer_inline_query(&query.id, results).cache_time(86400).await {
+    match bot.answer_inline_query(query.id.clone(), results).cache_time(86400).await {
         Ok(_) => {}
         Err(e) => {
             if e.to_string().contains("Document_invalid") {

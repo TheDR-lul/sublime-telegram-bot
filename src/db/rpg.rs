@@ -405,3 +405,56 @@ pub async fn update_battle_state(
     Ok(())
 }
 
+/// Tests for RPG character (player) creation.
+/// Require DATABASE_URL to a running Postgres (e.g. postgresql://user:pass@localhost/postgres).
+#[cfg(test)]
+mod tests {
+    use super::get_or_create_player;
+    use crate::error::AppError;
+    use sqlx::PgPool;
+
+    /// Insert a tguser and return its id (for FK from rpg_player).
+    async fn insert_tguser(pool: &PgPool, tg_id: i64) -> Result<i32, AppError> {
+        let row = sqlx::query_scalar::<_, i32>(
+            r#"
+            INSERT INTO tguser (tg_id, username, first_name, last_name, lang_code, is_blocked, created_at, updated_at, last_seen_at)
+            VALUES ($1, 'testuser', 'Test', 'User', 'en', false, NOW(), NOW(), NOW())
+            ON CONFLICT (tg_id) DO UPDATE SET updated_at = NOW()
+            RETURNING id
+            "#,
+        )
+        .bind(tg_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// First RPG action from user: character (player) must be created.
+    #[sqlx::test]
+    #[ignore = "requires DATABASE_URL and running Postgres"]
+    async fn get_or_create_player_first_time_creates_character(pool: PgPool) -> Result<(), AppError> {
+        let user_id = insert_tguser(&pool, 99_001).await?;
+        let player = get_or_create_player(&pool, user_id).await?;
+        assert_eq!(player.user_id, user_id);
+        assert_eq!(player.level, 1);
+        assert_eq!(player.xp, 0);
+        assert_eq!(player.hp_current, player.hp_max);
+        assert_eq!(player.pos_x, 0);
+        assert_eq!(player.pos_y, 0);
+        assert!(player.class_code.is_none());
+        Ok(())
+    }
+
+    /// Second call for same user must return same player (no duplicate character).
+    #[sqlx::test]
+    #[ignore = "requires DATABASE_URL and running Postgres"]
+    async fn get_or_create_player_second_call_returns_same(pool: PgPool) -> Result<(), AppError> {
+        let user_id = insert_tguser(&pool, 99_002).await?;
+        let first = get_or_create_player(&pool, user_id).await?;
+        let second = get_or_create_player(&pool, user_id).await?;
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.user_id, second.user_id);
+        Ok(())
+    }
+}
+
