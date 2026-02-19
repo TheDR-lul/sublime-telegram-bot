@@ -1,0 +1,26 @@
+# Deploy: use pre-built image (no build on server). Token via TELOXIDE_TOKEN.
+services:
+  db:
+    image: postgres:17
+    container_name: sublime-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sublime_bot
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  bot:
+    image: sublime-bot:latest
+    container_name: sublime-bot
+    restart: unless-stopped
+    environment:
+      TELOXIDE_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DATABASE_URL: postgres://postgres:postgres@db:5432/sublime_bot
+      RUST_LOG: info
+    depends_on:
+      - db
+
+volumes:
+  postgres-data:
