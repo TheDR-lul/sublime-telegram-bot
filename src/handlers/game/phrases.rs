@@ -106,6 +106,8 @@ pub mod stage4 {
 
 /// HTML templates for game messages. Placeholders: {username}, {year}, {player_stats}, {player_count}, {number}, {amount}, {player_list}.
 pub mod text_static {
+    /// Shown once at the start of an autorun draw (sudden pidor).
+    pub const SUDDEN_PIDOR_ACTIVATED: &str = "⚠️ Внезапный пидор активирован!";
     pub const REGISTRATION_SUCCESS: &str = "<b>OK!</b> Ты теперь участвуешь в игре \"<b>Пидор Дня</b>\"!";
     pub const ERROR_ALREADY_REGISTERED: &str = "Эй, ты уже в игре!";
     pub const REMOVE_REGISTRATION: &str = "<b>OK!</b> Ты больше <b>не</b> участвуешь в игре \"<b>Пидор Дня</b>\"!\n<i>P.S. Но всё равно пидор!</i>";

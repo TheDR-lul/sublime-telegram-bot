@@ -125,18 +125,20 @@ pub async fn pidor_handler(
     pool: PgPool,
 ) -> Result<(), AppError> {
     let chat_id = msg.chat.id;
-    run_pidor_game(&bot, &pool, chat_id).await
+    run_pidor_game(&bot, &pool, chat_id, false).await
 }
 
+/// Run Pidor game for a chat. When result for today already exists: manual shows it, autorun skips (no spam).
 async fn run_pidor_game(
     bot: &Bot,
     pool: &PgPool,
     chat_id: ChatId,
+    is_autorun: bool,
 ) -> Result<(), AppError> {
     let chat_id_raw = chat_id.0;
     let game = game::get_or_create_game(pool, chat_id_raw).await?;
     
-    tracing::info!("Game {} of the day started (chat_id={})", game.id, chat_id_raw);
+    tracing::info!("Game {} of the day started (chat_id={}, autorun={})", game.id, chat_id_raw, is_autorun);
     let players = game::get_players(pool, game.id).await?;
     
     if players.len() < 2 {
@@ -151,6 +153,9 @@ async fn run_pidor_game(
     let last_day = current_dt.month() == 12 && current_dt.day() == 31;
     
     if let Some(result) = game::get_today_result(pool, game.id, cur_year, cur_day).await? {
+        if is_autorun {
+            return Ok(());
+        }
         let winner = game::get_user_by_id(pool, result.winner_id)
             .await?
             .ok_or_else(|| AppError::Config("Winner not found".into()))?;
@@ -174,6 +179,10 @@ async fn run_pidor_game(
         bot.send_message(chat_id, &announcement)
             .parse_mode(teloxide::types::ParseMode::Html)
             .await?;
+    }
+    
+    if is_autorun {
+        bot.send_message(chat_id, text_static::SUDDEN_PIDOR_ACTIVATED).await?;
     }
     
     let stage1_text = stage1::PHRASES.choose(&mut rng).unwrap();
@@ -245,17 +254,29 @@ async fn run_pidor_game(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum PidorAutorunSlot {
-    Morning,
-    Day,
-    Evening,
+    Morning,  // 8-10
+    Day,      // 14-16
+    Evening,  // 20-22
+}
+
+impl PidorAutorunSlot {
+    fn window_hours(self) -> (i32, i32) {
+        match self {
+            PidorAutorunSlot::Morning => (8, 10),
+            PidorAutorunSlot::Day => (14, 16),
+            PidorAutorunSlot::Evening => (20, 22),
+        }
+    }
 }
 
 /// Background scheduler: runs Pidor game 3 times per day (morning/day/evening) in Kyiv timezone.
+/// Each slot fires at a random time within a 2-hour window.
 pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool) {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use tokio::time::{sleep, Duration};
 
     let mut fired: HashSet<(i32, i32, PidorAutorunSlot)> = HashSet::new();
+    let mut scheduled: HashMap<(i32, i32, PidorAutorunSlot), (i32, i32)> = HashMap::new();
 
     loop {
         let now = current_datetime_kyiv();
@@ -263,22 +284,33 @@ pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool) {
         let day = now.ordinal() as i32;
         let hour = now.hour() as i32;
         let minute = now.minute() as i32;
+        let now_minutes = hour * 60 + minute;
 
-        let slot = if hour == 9 && minute == 0 {
-            Some(PidorAutorunSlot::Morning)
-        } else if hour == 15 && minute == 0 {
-            Some(PidorAutorunSlot::Day)
-        } else if hour == 21 && minute == 0 {
-            Some(PidorAutorunSlot::Evening)
-        } else {
-            None
-        };
-
-        if let Some(slot) = slot {
+        for slot in [PidorAutorunSlot::Morning, PidorAutorunSlot::Day, PidorAutorunSlot::Evening] {
             let key = (year, day, slot);
-            if !fired.contains(&key) {
+            if fired.contains(&key) {
+                continue;
+            }
+            let (start_h, end_h) = slot.window_hours();
+            let start_m = start_h * 60;
+            let end_m = end_h * 60;
+            let in_window = now_minutes >= start_m && now_minutes <= end_m;
+
+            if !in_window {
+                continue;
+            }
+
+            let fire_at = *scheduled.entry(key).or_insert_with(|| {
+                let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+                let minutes_range: Vec<i32> = (start_m..=end_m).collect();
+                let fire_m = *minutes_range.choose(&mut rng).unwrap();
+                (fire_m / 60, fire_m % 60)
+            });
+
+            let fire_minutes = fire_at.0 * 60 + fire_at.1;
+            if now_minutes >= fire_minutes {
                 fired.insert(key);
-                if let Err(err) = run_pidor_autorun_for_all_games(&bot, &pool).await {
+                if let Err(err) = run_pidor_autorun_for_all_games(&bot, &pool, true).await {
                     tracing::error!("Pidor autorun scheduler error: {:?}", err);
                 }
             }
@@ -288,11 +320,11 @@ pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool) {
     }
 }
 
-async fn run_pidor_autorun_for_all_games(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
+async fn run_pidor_autorun_for_all_games(bot: &Bot, pool: &PgPool, is_autorun: bool) -> Result<(), AppError> {
     let games = game::list_games(pool).await?;
     for g in games {
         let chat_id = ChatId(g.chat_id);
-        if let Err(err) = run_pidor_game(bot, pool, chat_id).await {
+        if let Err(err) = run_pidor_game(bot, pool, chat_id, is_autorun).await {
             tracing::error!(
                 "Failed to run autorun Pidor game for chat {}: {:?}",
                 g.chat_id,
