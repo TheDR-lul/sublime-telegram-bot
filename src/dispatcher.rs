@@ -159,26 +159,17 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }))
         .branch(case![Cmd::Ttvideo(_s)].endpoint(tiktok::tt_video_handler))
         .branch(case![Cmd::Ttlink(_s)].endpoint(tiktok::tt_link_handler))
-        .branch(
-            dptree::filter(|msg: &Message| {
-                if let Some(text) = msg.text() {
-                    Regex::new(r"^/pidor(\d{4})(?:@.+)?$").unwrap().is_match(text)
-                } else {
-                    false
-                }
-            })
-            .endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
-                use crate::handlers::game::commands;
-                let regex = Regex::new(r"^/pidor(\d{4})(?:@.+)?$").unwrap();
-                if let Some(text) = msg.text()
-                    && let Some(caps) = regex.captures(text)
-                    && let Ok(year) = caps[1].parse::<i32>()
-                {
-                    return commands::pidoryear_handler(bot, msg, year, pool).await;
-                }
-                Ok(())
-            }),
-        )
+        .branch(dptree::endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
+            use crate::handlers::game::commands;
+            let regex = Regex::new(r"^/pidor(\d{4})(?:@.+)?$").unwrap();
+            if let Some(text) = msg.text()
+                && let Some(caps) = regex.captures(text)
+                && let Ok(year) = caps[1].parse::<i32>()
+            {
+                return commands::pidoryear_handler(bot, msg, year, pool).await;
+            }
+            Ok(())
+        }))
 }
 
 /// Build the full update handler tree (message + callback + inline).
@@ -198,14 +189,15 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
             Ok(())
         });
 
-    let inline_schema = Update::filter_inline_query()
-        .branch(
-            dptree::filter(|q: &InlineQuery| q.query.trim().starts_with("http"))
-                .endpoint(|bot: Bot, query: InlineQuery, pool: PgPool, config: Config| async move {
-                    tiktok::tt_inline_handler(bot, query, pool, config).await
-                }),
-        )
-        .branch(dptree::endpoint(misc::inline_handler));
+    let inline_schema = Update::filter_inline_query().branch(
+        dptree::endpoint(|bot: Bot, query: InlineQuery, pool: PgPool, config: Config| async move {
+            if query.query.trim().starts_with("http") {
+                tiktok::tt_inline_handler(bot, query, pool, config).await
+            } else {
+                misc::inline_handler(bot, query).await
+            }
+        }),
+    );
 
     dptree::entry()
         .branch(schema)

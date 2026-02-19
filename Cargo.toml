@@ -32,7 +32,7 @@ serde_json = { version = "1.0.149", features = ["preserve_order"] }
 [dev-dependencies]
 teloxide_tests = "0.4"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate"] }
-testcontainers = "0.27.0"
+testcontainers = "0.26.0"
 testcontainers-modules = { version = "0.14", features = ["postgres"] }
 
 [features]
