@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::dptree::case;
 use teloxide::prelude::*;
-use teloxide::types::{CallbackQuery, InlineQuery, Update, UpdateKind};
+use teloxide::types::{CallbackQuery, ChatMemberUpdated, InlineQuery, Update, UpdateKind};
 use teloxide::utils::command::BotCommands;
 
 use crate::config::Config;
@@ -199,9 +199,48 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }),
     );
 
+    let chat_member_schema = Update::filter_chat_member().branch(
+        dptree::endpoint(
+            |_bot: Bot, upd: ChatMemberUpdated, pool: PgPool| async move {
+                use teloxide::types::ChatMemberStatus;
+
+                let chat_id = upd.chat.id.0;
+                let user = upd
+                    .old_chat_member
+                    .user
+                    .clone(); // same in old/new, but точно есть
+                let status = upd.new_chat_member.status();
+
+                // Интересует только случай, когда пользователь перестал быть участником
+                let is_gone = matches!(status, ChatMemberStatus::Left | ChatMemberStatus::Banned);
+
+                if !is_gone {
+                    return Ok(());
+                }
+
+                if let Some(tg_id) = user.id.0.try_into().ok() {
+                    if let Err(err) =
+                        crate::db::game::remove_player_by_chat_and_tg_id(&pool, chat_id, tg_id)
+                            .await
+                    {
+                        tracing::error!(
+                            "Failed to auto-unregister game player on leave (chat_id={}, tg_id={}): {:?}",
+                            chat_id,
+                            tg_id,
+                            err
+                        );
+                    }
+                }
+
+                Ok(())
+            },
+        ),
+    );
+
     dptree::entry()
         .branch(schema)
         .branch(callback_schema)
         .branch(inline_schema)
+        .branch(chat_member_schema)
 }
 

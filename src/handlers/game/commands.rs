@@ -1,10 +1,10 @@
 use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
-use chrono_tz::Europe::Moscow;
+use chrono_tz::Europe::Kyiv;
 use rand::prelude::*;
 use sqlx::PgPool;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::Message;
+use teloxide::types::{ChatId, Message};
 use teloxide::utils::html::escape as escape_html;
 
 use crate::db::game;
@@ -18,8 +18,8 @@ use crate::handlers::game::phrases::{
 
 const GAME_RESULT_TIME_DELAY_SECS: u64 = 2;
 
-fn current_datetime_moscow() -> DateTime<chrono_tz::Tz> {
-    Utc::now().with_timezone(&Moscow)
+fn current_datetime_kyiv() -> DateTime<chrono_tz::Tz> {
+    Utc::now().with_timezone(&Kyiv)
 }
 
 pub async fn pidorules_handler(
@@ -40,7 +40,7 @@ pub async fn pidorules_handler(
 \n\
 <b>Важно</b>, розыгрыш проходит только <b>раз в день</b>, повторная команда выведет <b>результат</b> игры.\n\
 \n\
-Сброс розыгрыша происходит каждый день в 12 часов ночи по UTC+2 (примерно в два часа ночи по Москве).\n\n\
+Сброс розыгрыша происходит каждый день в 12 часов ночи по киевскому времени (UTC+2 / UTC+3 в зависимости от сезона).\n\n\
 Поддержать бота можно по <a href=\"https://github.com/TheDR-lul/sublime\">ссылке</a> :)";
     bot.send_message(msg.chat.id, rules)
         .parse_mode(teloxide::types::ParseMode::Html)
@@ -124,32 +124,41 @@ pub async fn pidor_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
-    let chat_id = msg.chat.id.0;
-    let game = game::get_or_create_game(&pool, chat_id).await?;
+    let chat_id = msg.chat.id;
+    run_pidor_game(&bot, &pool, chat_id).await
+}
+
+async fn run_pidor_game(
+    bot: &Bot,
+    pool: &PgPool,
+    chat_id: ChatId,
+) -> Result<(), AppError> {
+    let chat_id_raw = chat_id.0;
+    let game = game::get_or_create_game(pool, chat_id_raw).await?;
     
-    tracing::info!("Game {} of the day started", game.id);
-    let players = game::get_players(&pool, game.id).await?;
+    tracing::info!("Game {} of the day started (chat_id={})", game.id, chat_id_raw);
+    let players = game::get_players(pool, game.id).await?;
     
     if players.len() < 2 {
-        bot.send_message(msg.chat.id, text_static::ERROR_NOT_ENOUGH_PLAYERS)
+        bot.send_message(chat_id, text_static::ERROR_NOT_ENOUGH_PLAYERS)
             .await?;
         return Ok(());
     }
     
-    let current_dt = current_datetime_moscow();
+    let current_dt = current_datetime_kyiv();
     let cur_year = current_dt.year();
     let cur_day = current_dt.ordinal() as i32;
     let last_day = current_dt.month() == 12 && current_dt.day() == 31;
     
-    if let Some(result) = game::get_today_result(&pool, game.id, cur_year, cur_day).await? {
-        let winner = game::get_user_by_id(&pool, result.winner_id)
+    if let Some(result) = game::get_today_result(pool, game.id, cur_year, cur_day).await? {
+        let winner = game::get_user_by_id(pool, result.winner_id)
             .await?
             .ok_or_else(|| AppError::Config("Winner not found".into()))?;
         let text = text_static::CURRENT_DAY_GAME_RESULT.replace(
             "{username}",
             &escape_html(&winner.full_username(false)),
         );
-        bot.send_message(msg.chat.id, text)
+        bot.send_message(chat_id, text)
             .parse_mode(teloxide::types::ParseMode::Html)
             .await?;
         return Ok(());
@@ -158,45 +167,45 @@ pub async fn pidor_handler(
     let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     let winner = players.choose(&mut rng).unwrap();
     
-    game::insert_result(&pool, game.id, winner.id, cur_year, cur_day).await?;
+    game::insert_result(pool, game.id, winner.id, cur_year, cur_day).await?;
     
     if last_day {
         let announcement = text_static::YEAR_RESULTS_ANNOUNCEMENT.replace("{year}", &cur_year.to_string());
-        bot.send_message(msg.chat.id, &announcement)
+        bot.send_message(chat_id, &announcement)
             .parse_mode(teloxide::types::ParseMode::Html)
             .await?;
     }
     
     let stage1_text = stage1::PHRASES.choose(&mut rng).unwrap();
-    bot.send_message(msg.chat.id, *stage1_text).await?;
+    bot.send_message(chat_id, *stage1_text).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
     let stage2_text = stage2::PHRASES.choose(&mut rng).unwrap();
-    bot.send_message(msg.chat.id, *stage2_text).await?;
+    bot.send_message(chat_id, *stage2_text).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
     let stage3_text = stage3::PHRASES.choose(&mut rng).unwrap();
-    bot.send_message(msg.chat.id, *stage3_text).await?;
+    bot.send_message(chat_id, *stage3_text).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
     let phrase = stage4::PHRASES.choose(&mut rng).unwrap();
     let stage4_text = phrase.replace("{username}", &escape_html(&winner.full_username(true)));
-    bot.send_message(msg.chat.id, stage4_text)
+    bot.send_message(chat_id, stage4_text)
         .parse_mode(teloxide::types::ParseMode::Html)
         .await?;
 
     // Achievements based on updated stats after today's game.
-    if let Some((_user, count)) = game::stats_personal(&pool, game.id, winner.id).await? {
-        if count == 1 && achievements::grant(&pool, winner.id, "first_pidor_win").await? {
+    if let Some((_user, count)) = game::stats_personal(pool, game.id, winner.id).await? {
+        if count == 1 && achievements::grant(pool, winner.id, "first_pidor_win").await? {
             bot.send_message(
-                msg.chat.id,
+                chat_id,
                 "🥇 Новая ачивка: Первый пошёл (первая победа в Пидор Дня).",
             )
             .await?;
         }
-        if count >= 3 && achievements::grant(&pool, winner.id, "three_pidor_wins").await? {
+        if count >= 3 && achievements::grant(pool, winner.id, "three_pidor_wins").await? {
             bot.send_message(
-                msg.chat.id,
+                chat_id,
                 "🏆 Новая ачивка: Почётный пидор чата (3 победы).",
             )
             .await?;
@@ -204,16 +213,16 @@ pub async fn pidor_handler(
     }
 
     // Achievement: two wins in a row (previous day winner is same user).
-    let prev_dt = current_datetime_moscow() - Duration::days(1);
+    let prev_dt = current_datetime_kyiv() - Duration::days(1);
     let prev_year = prev_dt.year();
     let prev_day = prev_dt.ordinal() as i32;
     if let Some(prev_res) =
-        game::get_today_result(&pool, game.id, prev_year, prev_day).await?
+        game::get_today_result(pool, game.id, prev_year, prev_day).await?
         && prev_res.winner_id == winner.id
-        && achievements::grant(&pool, winner.id, "pidor_series_2").await?
+        && achievements::grant(pool, winner.id, "pidor_series_2").await?
     {
         bot.send_message(
-            msg.chat.id,
+            chat_id,
             "🔥 Новая ачивка: Пидор‑серийник (2 победы подряд).",
         )
         .await?;
@@ -222,15 +231,75 @@ pub async fn pidor_handler(
     // Achievement: night win.
     let hour = current_dt.hour();
     if (0..6).contains(&hour)
-        && achievements::grant(&pool, winner.id, "night_pidor").await?
+        && achievements::grant(pool, winner.id, "night_pidor").await?
     {
         bot.send_message(
-            msg.chat.id,
+            chat_id,
             "🌙 Новая ачивка: Ночной пидор (победа ночью).",
         )
         .await?;
     }
 
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PidorAutorunSlot {
+    Morning,
+    Day,
+    Evening,
+}
+
+/// Background scheduler: runs Pidor game 3 times per day (morning/day/evening) in Kyiv timezone.
+pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool) {
+    use std::collections::HashSet;
+    use tokio::time::{sleep, Duration};
+
+    let mut fired: HashSet<(i32, i32, PidorAutorunSlot)> = HashSet::new();
+
+    loop {
+        let now = current_datetime_kyiv();
+        let year = now.year();
+        let day = now.ordinal() as i32;
+        let hour = now.hour() as i32;
+        let minute = now.minute() as i32;
+
+        let slot = if hour == 9 && minute == 0 {
+            Some(PidorAutorunSlot::Morning)
+        } else if hour == 15 && minute == 0 {
+            Some(PidorAutorunSlot::Day)
+        } else if hour == 21 && minute == 0 {
+            Some(PidorAutorunSlot::Evening)
+        } else {
+            None
+        };
+
+        if let Some(slot) = slot {
+            let key = (year, day, slot);
+            if !fired.contains(&key) {
+                fired.insert(key);
+                if let Err(err) = run_pidor_autorun_for_all_games(&bot, &pool).await {
+                    tracing::error!("Pidor autorun scheduler error: {:?}", err);
+                }
+            }
+        }
+
+        sleep(Duration::from_secs(30)).await;
+    }
+}
+
+async fn run_pidor_autorun_for_all_games(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
+    let games = game::list_games(pool).await?;
+    for g in games {
+        let chat_id = ChatId(g.chat_id);
+        if let Err(err) = run_pidor_game(bot, pool, chat_id).await {
+            tracing::error!(
+                "Failed to run autorun Pidor game for chat {}: {:?}",
+                g.chat_id,
+                err
+            );
+        }
+    }
     Ok(())
 }
 
@@ -253,7 +322,7 @@ pub async fn pidorstats_handler(
 ) -> Result<(), AppError> {
     let chat_id = msg.chat.id.0;
     let game = game::get_or_create_game(&pool, chat_id).await?;
-    let current_dt = current_datetime_moscow();
+    let current_dt = current_datetime_kyiv();
     let cur_year = current_dt.year();
     
     let db_results = game::stats_current_year(&pool, game.id, cur_year).await?;

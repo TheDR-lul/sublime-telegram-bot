@@ -22,6 +22,13 @@ pub async fn get_or_create_game(pool: &PgPool, chat_id: i64) -> Result<Game, App
     Ok(game)
 }
 
+pub async fn list_games(pool: &PgPool) -> Result<Vec<Game>, AppError> {
+    let rows = sqlx::query_as::<_, Game>("SELECT id, chat_id FROM game")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
 pub async fn add_player(pool: &PgPool, game_id: i32, user_id: i32) -> Result<(), AppError> {
     sqlx::query("INSERT INTO gameplayer (game_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(game_id)
@@ -37,6 +44,25 @@ pub async fn remove_player(pool: &PgPool, game_id: i32, user_id: i32) -> Result<
         .bind(user_id)
         .execute(pool)
         .await?;
+    Ok(r.rows_affected() > 0)
+}
+
+pub async fn remove_player_by_chat_and_tg_id(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+) -> Result<bool, AppError> {
+    let r = sqlx::query(
+        r#"
+        DELETE FROM gameplayer
+        WHERE game_id = (SELECT id FROM game WHERE chat_id = $1)
+          AND user_id = (SELECT id FROM tguser WHERE tg_id = $2)
+        "#,
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .execute(pool)
+    .await?;
     Ok(r.rows_affected() > 0)
 }
 

@@ -45,6 +45,16 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
 
     let full_schema = sublime::dispatcher::build_schema();
 
+    // Background autorun for daily Pidor game (Kyiv timezone, 3 times per day).
+    {
+        let bot_clone = bot.clone();
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            sublime::handlers::game::commands::run_pidor_autorun_scheduler(bot_clone, pool_clone)
+                .await;
+        });
+    }
+
     let mut disp = teloxide::dispatching::Dispatcher::builder(bot.clone(), full_schema)
         .dependencies(teloxide::dptree::deps![pool, cfg])
         .error_handler(teloxide::error_handlers::LoggingErrorHandler::with_custom_text(

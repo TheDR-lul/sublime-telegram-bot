@@ -43,6 +43,7 @@ pub struct RpgUiState {
     pub message_id: i64,
     pub mode: String,
     pub submode: Option<String>,
+    pub payload_json: serde_json::Value,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -99,6 +100,64 @@ pub struct RpgEquipmentEntry {
     pub equipped_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RpgMobTemplate {
+    pub id: i32,
+    pub code: String,
+    pub name: String,
+    pub description: String,
+    pub base_stats: serde_json::Value,
+    pub loot_table_code: Option<String>,
+    pub recommended_level: i32,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RpgSkill {
+    pub id: i32,
+    pub code: String,
+    pub name: String,
+    pub description: String,
+    pub cost_stamina: i32,
+    pub cooldown_turns: i32,
+    pub target_type: String,
+    pub effect_type: String,
+    pub scaling: serde_json::Value,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GuildBossTemplate {
+    pub id: i32,
+    pub code: String,
+    pub name: String,
+    pub description: String,
+    pub recommended_level: i32,
+    pub max_hp: i64,
+    pub attack_pattern: serde_json::Value,
+    pub loot_table_code: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GuildRaid {
+    pub id: i32,
+    pub guild_id: i32,
+    pub boss_id: i32,
+    pub status: String,
+    pub hp_left: i64,
+    pub phase_state: serde_json::Value,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GuildRaidParticipation {
+    pub raid_id: i32,
+    pub player_id: i32,
+    pub damage_done: i64,
+    pub healing_done: i64,
+    pub hits: i32,
+    pub deaths: i32,
+}
+
 /// In-memory battle state for PvE MVP. Stored in rpg_battle.state_json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BattleParticipantState {
@@ -113,6 +172,55 @@ pub struct RpgBattleState {
     pub enemy: BattleParticipantState,
     pub turn_player_id: i32,
     pub log: Vec<String>,
+}
+
+/// Simple battle math helpers (MVP).
+pub mod battle_math {
+    use super::RpgPlayer;
+
+    pub fn calc_attack_phys(player: &RpgPlayer) -> i32 {
+        // Very approximate: base from strength and level.
+        5 + player.strength * 2 + player.level
+    }
+
+    pub fn calc_defense_phys(player: &RpgPlayer) -> i32 {
+        2 + player.vitality + (player.level / 2)
+    }
+
+    pub fn roll_hit_chance(acc: i32, eva: i32) -> bool {
+        let base = 0.75_f64;
+        let acc_term = (acc as f64) * 0.01;
+        let eva_term = (eva as f64) * 0.01;
+        let mut chance = base + acc_term - eva_term;
+        if chance < 0.05 {
+            chance = 0.05;
+        }
+        if chance > 0.95 {
+            chance = 0.95;
+        }
+        // Deterministic approximation: treat chance >= 0.5 as hit.
+        chance >= 0.5
+    }
+
+    pub fn roll_damage(
+        attack: i32,
+        defense: i32,
+        crit_chance: f64,
+        crit_multiplier: f64,
+    ) -> (i32, bool) {
+        let mut base = (attack as f64 - defense as f64 * 0.7).max(1.0);
+
+        // Deterministic pseudo-variance: small variation based on attack/defense parity.
+        let variance = if (attack + defense) % 2 == 0 { 1.1 } else { 0.9 };
+        base *= variance;
+
+        let is_crit = crit_chance > 0.0;
+        if is_crit {
+            base *= crit_multiplier;
+        }
+
+        (base.round() as i32, is_crit)
+    }
 }
 
 /// Get or create RPG player for given tguser id.
@@ -161,7 +269,7 @@ pub async fn get_ui_state(
 ) -> Result<Option<RpgUiState>, AppError> {
     let state = sqlx::query_as::<_, RpgUiState>(
         r#"
-        SELECT id, user_id, chat_id, message_id, mode, submode
+        SELECT id, user_id, chat_id, message_id, mode, submode, payload_json
         FROM rpg_ui_state
         WHERE user_id = $1 AND chat_id = $2
         ORDER BY updated_at DESC
@@ -185,10 +293,33 @@ pub async fn upsert_ui_state(
     mode: &str,
     submode: Option<&str>,
 ) -> Result<(), AppError> {
+    upsert_ui_state_with_payload(
+        pool,
+        user_id,
+        chat_id,
+        message_id,
+        mode,
+        submode,
+        serde_json::json!({}),
+    )
+    .await
+}
+
+/// Upsert UI state with payload JSON.
+/// Note: Always inserts new row; get_ui_state uses ORDER BY updated_at DESC LIMIT 1 to get latest.
+pub async fn upsert_ui_state_with_payload(
+    pool: &PgPool,
+    user_id: i32,
+    chat_id: i64,
+    message_id: i64,
+    mode: &str,
+    submode: Option<&str>,
+    payload: serde_json::Value,
+) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        INSERT INTO rpg_ui_state (user_id, chat_id, message_id, mode, submode, updated_at)
-        VALUES ($1, $2, $3, $4, $5, NOW())
+        INSERT INTO rpg_ui_state (user_id, chat_id, message_id, mode, submode, payload_json, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
         "#,
     )
     .bind(user_id)
@@ -196,6 +327,7 @@ pub async fn upsert_ui_state(
     .bind(message_id)
     .bind(mode)
     .bind(submode)
+    .bind(payload)
     .execute(pool)
     .await?;
 
@@ -291,6 +423,51 @@ pub async fn add_item_to_inventory(
     Ok(())
 }
 
+/// Recalculate stamina based on time passed since last update.
+pub fn recalc_stamina(player: &RpgPlayer, now: DateTime<Utc>) -> (i32, DateTime<Utc>) {
+    // Simple regen: +1 stamina every 60 seconds, up to stamina_max.
+    let mut current = player.stamina_current;
+    let mut updated_at = player.stamina_updated_at;
+    if current >= player.stamina_max {
+        return (current, updated_at);
+    }
+    let seconds = (now - updated_at).num_seconds();
+    if seconds <= 0 {
+        return (current, updated_at);
+    }
+    let regen_points = (seconds / 60) as i32;
+    if regen_points <= 0 {
+        return (current, updated_at);
+    }
+    current = (current + regen_points).min(player.stamina_max);
+    updated_at = now;
+    (current, updated_at)
+}
+
+/// Persist stamina values.
+pub async fn update_stamina(
+    pool: &PgPool,
+    player_id: i32,
+    stamina_current: i32,
+    stamina_updated_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE rpg_player
+        SET stamina_current = $1,
+            stamina_updated_at = $2
+        WHERE id = $3
+        "#,
+    )
+    .bind(stamina_current)
+    .bind(stamina_updated_at)
+    .bind(player_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 /// Create a simple PvE battle against a basic enemy code using precomputed battle state.
 pub async fn create_pve_battle(
     pool: &PgPool,
@@ -301,7 +478,9 @@ pub async fn create_pve_battle(
     let state = RpgBattleState {
         player_id: player.id,
         enemy_code: enemy_code.to_string(),
-        player: BattleParticipantState { hp: player.hp_current },
+        player: BattleParticipantState {
+            hp: player.hp_current,
+        },
         enemy: BattleParticipantState { hp: enemy_hp },
         turn_player_id: player.id,
         log: Vec::new(),
@@ -409,9 +588,10 @@ pub async fn update_battle_state(
 /// Require DATABASE_URL to a running Postgres (e.g. postgresql://user:pass@localhost/postgres).
 #[cfg(test)]
 mod tests {
-    use super::get_or_create_player;
+    use super::{battle_math, get_or_create_player, recalc_stamina};
     use crate::error::AppError;
     use sqlx::PgPool;
+    use chrono::{TimeZone, Utc};
 
     /// Insert a tguser and return its id (for FK from rpg_player).
     async fn insert_tguser(pool: &PgPool, tg_id: i64) -> Result<i32, AppError> {
@@ -455,6 +635,65 @@ mod tests {
         assert_eq!(first.id, second.id);
         assert_eq!(first.user_id, second.user_id);
         Ok(())
+    }
+
+    #[test]
+    fn stamina_regeneration_works() {
+        let now = Utc.with_ymd_and_hms(2026, 2, 19, 12, 0, 0).unwrap();
+        let past = Utc.with_ymd_and_hms(2026, 2, 19, 11, 30, 0).unwrap();
+        let player = super::RpgPlayer {
+            id: 1,
+            user_id: 1,
+            level: 1,
+            xp: 0,
+            xp_to_next: 100,
+            hp_max: 100,
+            hp_current: 100,
+            stamina_max: 10,
+            stamina_current: 5,
+            stamina_updated_at: past,
+            strength: 1,
+            agility: 1,
+            intellect: 1,
+            vitality: 1,
+            luck: 1,
+            pos_x: 0,
+            pos_y: 0,
+            class_code: None,
+        };
+        let (stamina, _) = recalc_stamina(&player, now);
+        // 30 minutes => +0.5 * 60-second ticks, but integer division → +30 ticks.
+        // However we clamp to stamina_max, so expect full.
+        assert_eq!(stamina, 10);
+    }
+
+    #[test]
+    fn battle_math_damage_positive() {
+        // Simple sanity check to ensure damage is >= 1.
+        let player = super::RpgPlayer {
+            id: 1,
+            user_id: 1,
+            level: 1,
+            xp: 0,
+            xp_to_next: 100,
+            hp_max: 100,
+            hp_current: 100,
+            stamina_max: 10,
+            stamina_current: 10,
+            stamina_updated_at: Utc::now(),
+            strength: 5,
+            agility: 1,
+            intellect: 1,
+            vitality: 1,
+            luck: 1,
+            pos_x: 0,
+            pos_y: 0,
+            class_code: None,
+        };
+        let attack = battle_math::calc_attack_phys(&player);
+        let defense = battle_math::calc_defense_phys(&player);
+        let (damage, _) = battle_math::roll_damage(attack, defense, 0.1, 1.5);
+        assert!(damage >= 1);
     }
 }
 
