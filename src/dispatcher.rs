@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::error::AppError;
 use crate::handlers::{
     about, achievements as achievements_handler, commands::Cmd, game::commands as game,
-    kvstore, meme, misc, rpg, tiktok,
+    meme, misc, tiktok,
 };
 
 async fn callback_router(
@@ -22,8 +22,15 @@ async fn callback_router(
     config: Config,
 ) -> Result<(), AppError> {
     let data = query.data.as_deref().unwrap_or("");
+    // RPG: development for future — disabled; reply instead of opening menu
     if data.starts_with("rpg:") {
-        return rpg::rpg_callback_handler(bot, query, pool).await;
+        return misc::rpg_disabled_callback(bot, query).await;
+    }
+    if data.starts_with("menu:") {
+        return misc::menu_callback(bot, query, pool, config).await;
+    }
+    if data.starts_with("settings:") {
+        return game::pidorset_callback(bot, query, pool).await;
     }
     match data {
         "meme_en_refresh" => meme::meme_refresh_callback(bot, query).await,
@@ -38,13 +45,13 @@ async fn callback_router(
 /// so that MockBot's dependency injection does not require &Message (which comes from the filter).
 pub fn build_message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     dptree::entry().endpoint(
-        |update: Update, bot: Bot, pool: PgPool, _config: Config| async move {
+        |update: Update, bot: Bot, _pool: PgPool, _config: Config| async move {
             if let UpdateKind::Message(msg) = update.kind
                 && let Some(text) = msg.text()
                 && let Ok(cmd) = Cmd::parse(text, "")
                 && matches!(cmd, Cmd::Rpg)
             {
-                return rpg::rpg_menu_handler(bot, msg, cmd, pool).await;
+                return misc::rpg_disabled_handler(bot, msg, cmd).await;
             }
             Ok(())
         },
@@ -67,27 +74,22 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Err(_) => return Ok(()),
                     };
                     match &cmd {
+                        Cmd::Menu => misc::menu_handler(bot, msg, cmd).await,
                         Cmd::About => about::about_handler(bot, msg, cmd).await,
-                        Cmd::Hello => misc::hello_handler(bot, msg, cmd).await,
-                        Cmd::Slap(_) => misc::slap_handler(bot, msg, cmd).await,
+                        Cmd::Slap => misc::slap_handler(bot, msg, cmd).await,
                         Cmd::Shrug => misc::shrug_handler(bot, msg, cmd).await,
                         Cmd::Me(_) => misc::me_handler(bot, msg, cmd).await,
                         Cmd::Google(_) => misc::google_handler(bot, msg, cmd).await,
-                        Cmd::Pin => misc::pin_handler(bot, msg, cmd).await,
-                        Cmd::Echo(_) => misc::echo_handler(bot, msg, cmd).await,
-                        Cmd::Rpg => rpg::rpg_menu_handler(bot, msg, cmd, pool).await,
+                        Cmd::Rpg => misc::rpg_disabled_handler(bot, msg, cmd).await,
                         Cmd::Pidorscan(_) => misc::pidorscan_handler(bot, msg, cmd).await,
-                        Cmd::Get(_) => kvstore::get_handler(bot, msg, cmd, pool).await,
-                        Cmd::List => kvstore::list_handler(bot, msg, cmd, pool).await,
-                        Cmd::Set(_) => kvstore::set_handler(bot, msg, cmd, pool).await,
-                        Cmd::Del(_) => kvstore::del_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidor => game::pidor_handler(bot, msg, cmd, pool).await,
-                        Cmd::Pidorules => game::pidorules_handler(bot, msg, cmd).await,
+                        Cmd::Pidorules => game::pidorules_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidoreg => game::pidoreg_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorunreg => game::pidorunreg_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorstats => game::pidorstats_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorall => game::pidorall_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorme => game::pidorme_handler(bot, msg, cmd, pool).await,
+                        Cmd::Pidorset => game::pidorset_handler(bot, msg, pool).await,
                         Cmd::Achievements => achievements_handler::achievements_handler(bot, msg, cmd, pool).await,
                         Cmd::Meme => meme::meme_handler(bot, msg, cmd).await,
                         Cmd::Memeru => meme::memeru_handler(bot, msg, cmd, config).await,
@@ -105,34 +107,24 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
 fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     Update::filter_message()
         .filter_command::<Cmd>()
+        .branch(case![Cmd::Menu].endpoint(misc::menu_handler))
         .branch(case![Cmd::About].endpoint(about::about_handler))
-        .branch(case![Cmd::Hello].endpoint(misc::hello_handler))
-        .branch(case![Cmd::Slap(_s)].endpoint(misc::slap_handler))
+        .branch(case![Cmd::Slap].endpoint(misc::slap_handler))
         .branch(case![Cmd::Shrug].endpoint(misc::shrug_handler))
         .branch(case![Cmd::Me(_s)].endpoint(misc::me_handler))
         .branch(case![Cmd::Google(_s)].endpoint(misc::google_handler))
-        .branch(case![Cmd::Pin].endpoint(misc::pin_handler))
-        .branch(case![Cmd::Echo(_s)].endpoint(misc::echo_handler))
-        .branch(case![Cmd::Rpg].endpoint(|bot: Bot, msg: Message, _cmd: Cmd, pool: PgPool| async move {
-            rpg::rpg_menu_handler(bot, msg, _cmd, pool).await
-        }))
+        // RPG: development for future — disabled; show stub message
+        .branch(case![Cmd::Rpg].endpoint(misc::rpg_disabled_handler))
         .branch(case![Cmd::Pidorscan(_s)].endpoint(misc::pidorscan_handler))
-        .branch(case![Cmd::Get(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
-            kvstore::get_handler(bot, msg, cmd, pool).await
-        }))
-        .branch(case![Cmd::List].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
-            kvstore::list_handler(bot, msg, cmd, pool).await
-        }))
-        .branch(case![Cmd::Set(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
-            kvstore::set_handler(bot, msg, cmd, pool).await
-        }))
-        .branch(case![Cmd::Del(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
-            kvstore::del_handler(bot, msg, cmd, pool).await
-        }))
         .branch(case![Cmd::Pidor].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidor_handler(bot, msg, cmd, pool).await
         }))
-        .branch(case![Cmd::Pidorules].endpoint(game::pidorules_handler))
+        .branch(case![Cmd::Pidorules].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            game::pidorules_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Pidorset].endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
+            game::pidorset_handler(bot, msg, pool).await
+        }))
         .branch(case![Cmd::Pidoreg].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidoreg_handler(bot, msg, cmd, pool).await
         }))
@@ -161,7 +153,8 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         .branch(case![Cmd::Ttlink(_s)].endpoint(tiktok::tt_link_handler))
         .branch(dptree::endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
             use crate::handlers::game::commands;
-            let regex = Regex::new(r"^/pidor(\d{4})(?:@.+)?$").unwrap();
+            let regex = Regex::new(r"^/pidor(\d{4})(?:@.+)?$")
+                .expect("pidor year regex is valid");
             if let Some(text) = msg.text()
                 && let Some(caps) = regex.captures(text)
                 && let Ok(year) = caps[1].parse::<i32>()
@@ -201,17 +194,42 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
 
     let chat_member_schema = Update::filter_chat_member().branch(
         dptree::endpoint(
-            |_bot: Bot, upd: ChatMemberUpdated, pool: PgPool| async move {
+            |bot: Bot, upd: ChatMemberUpdated, pool: PgPool| async move {
                 use teloxide::types::ChatMemberStatus;
 
                 let chat_id = upd.chat.id.0;
-                let user = upd
-                    .old_chat_member
-                    .user
-                    .clone(); // same in old/new, but точно есть
+                let new_user = &upd.new_chat_member.user;
                 let status = upd.new_chat_member.status();
 
-                // Интересует только случай, когда пользователь перестал быть участником
+                // When the bot is added to a group, create a game so autorun runs in this chat too.
+                let bot_me = bot.get_me().await.ok();
+                if let Some(ref me) = bot_me {
+                    if new_user.id == me.id {
+                        let is_joined =
+                            matches!(status, ChatMemberStatus::Member | ChatMemberStatus::Administrator);
+                        if is_joined && upd.chat.is_group() {
+                            if let Err(err) = crate::db::game::get_or_create_game(&pool, chat_id).await {
+                                tracing::error!(
+                                    "Failed to create game when bot added to chat {}: {:?}",
+                                    chat_id,
+                                    err
+                                );
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+
+                // When a user joins (or is in chat), record them for "call unregistered" feature.
+                let is_in_chat = matches!(status, ChatMemberStatus::Member | ChatMemberStatus::Administrator | ChatMemberStatus::Restricted);
+                if is_in_chat && upd.chat.is_group() {
+                    if let Ok(tg_user) = crate::db::user::upsert_tg_user(&pool, new_user).await {
+                        let _ = crate::db::game::record_chat_member(&pool, chat_id, tg_user.id).await;
+                    }
+                }
+
+                // When a user left the chat, unregister them from the pidor game.
+                let user = upd.old_chat_member.user.clone();
                 let is_gone = matches!(status, ChatMemberStatus::Left | ChatMemberStatus::Banned);
 
                 if !is_gone {
@@ -230,6 +248,7 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                             err
                         );
                     }
+                    let _ = crate::db::game::remove_chat_member_by_tg_id(&pool, chat_id, tg_id).await;
                 }
 
                 Ok(())

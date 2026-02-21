@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "sublime")]
 #[command(about = "Telegram bot")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
@@ -28,6 +29,18 @@ pub enum Cmd {
     /// Set bot menu commands (set_my_commands) and exit
     #[command(subcommand)]
     Commands(CommandsCmd),
+
+    /// Run notification bot: /status, /stats. Use NOTIFICATION_BOT_TOKEN on server.
+    #[command(subcommand)]
+    Watchdog(WatchdogCmd),
+}
+
+#[derive(Subcommand)]
+pub enum WatchdogCmd {
+    /// Run the notification bot (status + stats)
+    Run,
+    /// Set notification bot menu commands only (status, stats) and exit
+    Commands,
 }
 
 #[derive(Subcommand)]

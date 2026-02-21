@@ -5,30 +5,18 @@ use teloxide::utils::command::BotCommands;
 #[derive(BotCommands, Clone, Debug)]
 #[command(rename_rule = "lowercase")]
 pub enum Cmd {
-    #[command(description = "some info about github repo")]
+    #[command(description = "menu with sections")]
+    Menu,
+    #[command(description = "about bot and repo")]
     About,
-    #[command(description = "say hello")]
-    Hello,
-    #[command(description = "simulate /slap command from IRC")]
-    Slap(String),
+    #[command(description = "slap someone by replying to their message")]
+    Slap,
     #[command(description = "shrug")]
     Shrug,
     #[command(description = "simulate /me command from IRC")]
     Me(String),
     #[command(description = "<query> let me google that for you")]
     Google(String),
-    #[command(description = "pin replied message")]
-    Pin,
-    #[command(description = "echo message")]
-    Echo(String),
-    #[command(description = "<key> get specific entry by key")]
-    Get(String),
-    #[command(description = "list entries for current chat")]
-    List,
-    #[command(description = "<key> <value> set specific value for key")]
-    Set(String),
-    #[command(description = "<key> remove specific key")]
-    Del(String),
     #[command(description = "play the game, see /pidorules first")]
     Pidor,
     #[command(description = "POTD game rules")]
@@ -55,6 +43,9 @@ pub enum Cmd {
     Achievements,
     #[command(description = "scan someone with pidor-detector")]
     Pidorscan(String),
-    #[command(description = "open Pidor-Royale RPG menu")]
+    #[command(description = "autorun settings (admins only)")]
+    Pidorset,
+    // RPG: development for future — disabled for now; /rpg shows stub message.
+    #[command(description = "Pidor-Royale RPG (in development)")]
     Rpg,
 }

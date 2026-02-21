@@ -56,7 +56,10 @@ fn get_random_ru_meme(config: &Config) -> String {
     if config.meme_ru_channels.is_empty() {
         return "https://t.me/beobanka/1000".to_string();
     }
-    let channel = config.meme_ru_channels.choose(&mut rng).unwrap();
+    let channel = config
+        .meme_ru_channels
+        .choose(&mut rng)
+        .expect("meme_ru_channels non-empty after is_empty check");
     let meme_id = rng.random_range(channel.start_id..=channel.end_id);
     format!("{}/{}", channel.url, meme_id)
 }

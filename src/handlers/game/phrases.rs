@@ -104,12 +104,39 @@ pub mod stage4 {
     ];
 }
 
+/// Roasts when user tries to register again (already in game). Placeholder: {username}.
+pub mod already_registered_roasts {
+    pub const PHRASES: &[&str] = &[
+        "<b>{username}</b>, ты уже в списке. Дважды пидором не становятся — им рождаются.",
+        "Эй, <b>{username}</b>, хватит жать на кнопку. Ты уже зарегистрирован, пидор.",
+        "<b>{username}</b>, система тебя уже видит. Повторная регистрация только усилит твоё пидорство.",
+        "О, <b>{username}</b> опять тут. Ты уже в игре. Расслабься и прими свою природу.",
+        "<b>{username}</b>, ты уже в розыгрыше. Второй раз зайти не получится — пидорство не суммируется.",
+        "Стоп, <b>{username}</b>. Ты уже участвуешь. Не позорься лишний раз.",
+        "<b>{username}</b>, мы тебя уже записали. Жди своего звёздного часа.",
+        "Повторная попытка, <b>{username}</b>? Ты уже в базе. Один раз пидор — навсегда в списке.",
+        "<b>{username}</b>, хватит. Ты уже в игре. Сохрани достоинство.",
+        "Эй, <b>{username}</b>, ты уже зарегистрирован. Не упрощай нам жизнь.",
+        "<b>{username}</b>, система говорит: ты уже в розыгрыше. Не нажимай ещё раз.",
+        "Один аккаунт — одна регистрация, <b>{username}</b>. Ты уже в деле.",
+        "<b>{username}</b>, ты уже в игре. Второй раз в одном розыгрыше не зайти.",
+        "Мы тебя помним, <b>{username}</b>. Ты уже в списке. Жди результата.",
+        "<b>{username}</b>, ты уже участвуешь. Расслабься и прими свою судьбу.",
+        "Снова ты, <b>{username}</b>. Регистрация уже есть — не выпендривайся.",
+        "<b>{username}</b>, хватит жать. Ты уже в розыгрыше. Терпение.",
+        "Повторная регистрация отклонена, <b>{username}</b>. Ты уже в игре.",
+        "<b>{username}</b>, ты уже в списке пидоров. Не торопись — своя очередь придёт.",
+        "Эй, <b>{username}</b>, ты уже зарегистрирован. Один раз написал — и хватит.",
+    ];
+}
+
 /// HTML templates for game messages. Placeholders: {username}, {year}, {player_stats}, {player_count}, {number}, {amount}, {player_list}.
 pub mod text_static {
-    /// Shown once at the start of an autorun draw (sudden pidor).
-    pub const SUDDEN_PIDOR_ACTIVATED: &str = "⚠️ Внезапный пидор активирован!";
+    /// Autorun slot phrases (sudden morning/day/evening pidor).
+    pub const SUDDEN_PIDOR_MORNING: &str = "⚠️ Внезапный утренний пидор активирован!";
+    pub const SUDDEN_PIDOR_DAY: &str = "⚠️ Внезапный дневной пидор активирован!";
+    pub const SUDDEN_PIDOR_EVENING: &str = "⚠️ Внезапный вечерний пидор активирован!";
     pub const REGISTRATION_SUCCESS: &str = "<b>OK!</b> Ты теперь участвуешь в игре \"<b>Пидор Дня</b>\"!";
-    pub const ERROR_ALREADY_REGISTERED: &str = "Эй, ты уже в игре!";
     pub const REMOVE_REGISTRATION: &str = "<b>OK!</b> Ты больше <b>не</b> участвуешь в игре \"<b>Пидор Дня</b>\"!\n<i>P.S. Но всё равно пидор!</i>";
     pub const REMOVE_REGISTRATION_ERROR: &str = "Ээээ, тьфу, ты и так не зарегестрирован!";
     pub const CURRENT_DAY_GAME_RESULT: &str = "Согласно моей информации, по результатам сегодняшнего розыгрыша <b>пидор дня</b> — {username}!";

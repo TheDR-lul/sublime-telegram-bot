@@ -1,4 +1,5 @@
-# Deploy: use pre-built image (no build on server). Token via TELOXIDE_TOKEN.
+# Deploy: use pre-built image (no build on server). Token via TELEGRAM_BOT_TOKEN.
+# Notification bot (watchdog): set NOTIFICATION_BOT_TOKEN in .env.watchdog and run with --profile watchdog.
 services:
   db:
     image: postgres:17
@@ -19,6 +20,24 @@ services:
       TELOXIDE_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DATABASE_URL: postgres://postgres:postgres@db:5432/sublime_bot
       RUST_LOG: info
+    depends_on:
+      - db
+
+  watchdog:
+    image: sublime-bot:latest
+    container_name: sublime-watchdog
+    restart: unless-stopped
+    profiles:
+      - watchdog
+    env_file:
+      - path: .env.watchdog
+        required: false
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/sublime_bot
+      WATCHDOG_CONTAINER: sublime-bot
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["/app/sublime", "watchdog", "run"]
     depends_on:
       - db
 

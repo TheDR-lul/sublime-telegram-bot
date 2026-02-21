@@ -170,7 +170,8 @@ pub async fn tt_inline_handler(
     config: Config,
 ) -> Result<(), AppError> {
     let q = query.query.trim();
-    let re = Regex::new(r"https?://[vmtw.]{0,5}tiktok.com/.*").unwrap();
+    let re = Regex::new(r"https?://[vmtw.]{0,5}tiktok.com/.*")
+        .expect("tiktok URL regex is valid");
     if !re.is_match(q) {
         return Ok(());
     }

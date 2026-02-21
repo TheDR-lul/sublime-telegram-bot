@@ -179,6 +179,10 @@ See `ansible/deploy-playbook.yml` for deployment automation.
 4. Configure and run migrations
 5. Start the service
 
+## Monitoring
+
+To get **alerts when the bot crashes** on a remote server (e.g. Telegram message when the container is down), see [docs/MONITORING.md](docs/MONITORING.md): watchdog script + optional Sentry for errors.
+
 ## License
 
 MIT

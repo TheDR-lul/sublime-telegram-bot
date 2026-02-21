@@ -1,27 +1,16 @@
+use sqlx::PgPool;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::Message;
+use teloxide::types::{CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId};
 
+use crate::config::Config;
 use crate::error::AppError;
+use crate::handlers::about;
+use crate::handlers::game::commands as game_commands;
 
 use rand::prelude::*;
 use teloxide::types::ParseMode;
 use teloxide::utils::html::escape as escape_html;
-
-pub async fn hello_handler(
-    bot: Bot,
-    msg: Message,
-    _: crate::handlers::commands::Cmd,
-) -> Result<(), AppError> {
-    let name = msg
-        .from
-        .as_ref()
-        .map(|u| u.first_name.as_str())
-        .unwrap_or("there");
-    bot.send_message(msg.chat.id, format!("Hello, {}!", name))
-        .await?;
-    Ok(())
-}
 
 fn raw_name_from_msg(msg: &Message) -> String {
     msg.from
@@ -38,17 +27,81 @@ fn raw_name_from_msg(msg: &Message) -> String {
 pub async fn slap_handler(
     bot: Bot,
     msg: Message,
-    cmd: crate::handlers::commands::Cmd,
+    _cmd: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
     let who = escape_html(&raw_name_from_msg(&msg));
-    let target = match &cmd {
-        crate::handlers::commands::Cmd::Slap(s) => escape_html(s),
-        _ => "void".to_string(),
+    
+    let target = if let Some(reply_to) = msg.reply_to_message() {
+        reply_to
+            .from
+            .as_ref()
+            .map(|u| {
+                escape_html(
+                    &u.username
+                        .as_deref()
+                        .unwrap_or(&u.first_name)
+                        .to_string()
+                )
+            })
+            .unwrap_or_else(|| "кто-то".to_string())
+    } else {
+        bot.send_message(msg.chat.id, "Ответь на сообщение, чтобы шлепнуть кого-то!")
+            .await?;
+        return Ok(());
     };
-    let text = format!("<b>{}</b> slaps <i>{}</i> around a bit with a large trout", who, target);
+    
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+    let phrase = slap_phrases::PHRASES
+        .choose(&mut rng)
+        .expect("slap_phrases::PHRASES is non-empty");
+    let text = phrase.replace("{who}", &who).replace("{target}", &target);
+    
     bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::Html)
         .await?;
+    Ok(())
+}
+
+mod slap_phrases {
+    pub const PHRASES: &[&str] = &[
+        "<b>{who}</b> смачно шлепнул хуйцом по лицу <i>{target}</i>",
+        "<b>{who}</b> мощно вмазал хуйцом в рожу <i>{target}</i>",
+        "<b>{who}</b> со всей дури ударил хуйцом по физиономии <i>{target}</i>",
+        "<b>{who}</b> от души приложил хуйцом к лицу <i>{target}</i>",
+        "<b>{who}</b> звонко шлепнул хуйцом по щеке <i>{target}</i>",
+        "<b>{who}</b> резко врезал хуйцом в морду <i>{target}</i>",
+        "<b>{who}</b> сочно ударил хуйцом по лицу <i>{target}</i>",
+        "<b>{who}</b> мощно треснул хуйцом по физиономии <i>{target}</i>",
+        "<b>{who}</b> с размаху влепил хуйцом в рожу <i>{target}</i>",
+        "<b>{who}</b> крепко шлепнул хуйцом по лицу <i>{target}</i>",
+        "<b>{who}</b> звучно ударил хуйцом по щеке <i>{target}</i>",
+        "<b>{who}</b> со всей силы вмазал хуйцом в морду <i>{target}</i>",
+        "<b>{who}</b> резко приложил хуйцом к физиономии <i>{target}</i>",
+        "<b>{who}</b> мощно врезал хуйцом по лицу <i>{target}</i>",
+        "<b>{who}</b> смачно треснул хуйцом в рожу <i>{target}</i>",
+    ];
+}
+
+/// RPG disabled stub: development for future.
+pub const RPG_DISABLED_MSG: &str = "Pidor-Royale RPG — в разработке на будущее. Следите за обновлениями.";
+
+pub async fn rpg_disabled_handler(
+    bot: Bot,
+    msg: Message,
+    _: crate::handlers::commands::Cmd,
+) -> Result<(), AppError> {
+    bot.send_message(msg.chat.id, RPG_DISABLED_MSG).await?;
+    Ok(())
+}
+
+pub async fn rpg_disabled_callback(
+    bot: Bot,
+    query: teloxide::types::CallbackQuery,
+) -> Result<(), AppError> {
+    if let Some(chat_id) = query.message.as_ref().map(|m| m.chat().id) {
+        bot.send_message(chat_id, RPG_DISABLED_MSG).await?;
+    }
+    bot.answer_callback_query(query.id).await?;
     Ok(())
 }
 
@@ -100,44 +153,6 @@ pub async fn google_handler(
     bot.send_message(msg.chat.id, url)
         .disable_link_preview(true)
         .await?;
-    Ok(())
-}
-
-pub async fn pin_handler(
-    bot: Bot,
-    msg: Message,
-    _: crate::handlers::commands::Cmd,
-) -> Result<(), AppError> {
-    if let Some(reply_to) = msg.reply_to_message() {
-        match bot.pin_chat_message(msg.chat.id, reply_to.id).await {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!("Failed to pin message: {:?}", e);
-                bot.send_message(msg.chat.id, "Не могу закрепить: нет прав или сообщение уже закреплено")
-                    .await?;
-            }
-        }
-    } else {
-        bot.send_message(msg.chat.id, "reply to message you want to <i>pin</i>")
-            .parse_mode(ParseMode::Html)
-            .await?;
-    }
-    Ok(())
-}
-
-pub async fn echo_handler(
-    bot: Bot,
-    msg: Message,
-    cmd: crate::handlers::commands::Cmd,
-) -> Result<(), AppError> {
-    let text = match &cmd {
-        crate::handlers::commands::Cmd::Echo(s) => {
-            let name = msg.from.as_ref().map(|u| u.full_name()).unwrap_or_else(|| "someone".to_string());
-            format!("{} said {}", name, s)
-        }
-        _ => return Ok(()),
-    };
-    bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }
 
@@ -257,12 +272,12 @@ pub async fn inline_handler(
     use teloxide::types::{InlineQueryResult, InlineQueryResultArticle, InputMessageContent, InputMessageContentText};
 
     let mut shuffled = Vec::new();
-    let re = regex::Regex::new(r"([^\W\d_]{4,})").unwrap();
+    let re = regex::Regex::new(r"([^\W\d_]{4,})").expect("word regex is valid");
     for word in re.split(q) {
         if word.chars().all(|c| c.is_alphanumeric()) && word.len() >= 4 {
             let mut chars: Vec<char> = word.chars().collect();
             let first = chars.remove(0);
-            let last = chars.pop().unwrap();
+            let last = chars.pop().expect("word length >= 4 so at least 2 chars after first");
             let mut rng = rand::make_rng::<rand::rngs::StdRng>();
             chars.shuffle(&mut rng);
             shuffled.push(format!("{}{}{}", first, chars.iter().collect::<String>(), last));
@@ -323,5 +338,183 @@ pub async fn inline_handler(
     ];
 
     bot.answer_inline_query(query.id, results).cache_time(0).await?;
+    Ok(())
+}
+
+fn menu_main_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback("Игра Пидор дня", "menu:game"),
+            InlineKeyboardButton::callback("Прочее", "menu:other"),
+        ],
+        vec![InlineKeyboardButton::callback("Администрирование", "menu:admin")],
+    ])
+}
+
+fn menu_admin_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback("Настройки автопидора", "menu:action:pidorset")],
+        vec![InlineKeyboardButton::callback("Позвать незарегистрированных", "menu:action:pidorcall")],
+        vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
+    ])
+}
+
+fn menu_game_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback("Правила", "menu:action:pidorules")],
+        vec![InlineKeyboardButton::callback("Статистика за год", "menu:action:pidorstats")],
+        vec![InlineKeyboardButton::callback("Статистика за всё время", "menu:action:pidorall")],
+        vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
+    ])
+}
+
+fn menu_other_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback("О боте", "menu:action:about")],
+        vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
+    ])
+}
+
+pub async fn menu_handler(
+    bot: Bot,
+    msg: Message,
+    _: crate::handlers::commands::Cmd,
+) -> Result<(), AppError> {
+    let chat_id = msg.chat.id;
+    let _ = bot.delete_message(chat_id, msg.id).await;
+    let sent = bot
+        .send_message(chat_id, "Выберите раздел:")
+        .reply_markup(menu_main_keyboard())
+        .await?;
+    game_commands::schedule_delete_message(bot, chat_id, sent.id);
+    Ok(())
+}
+
+pub async fn menu_callback(
+    bot: Bot,
+    query: CallbackQuery,
+    pool: PgPool,
+    _config: Config,
+) -> Result<(), AppError> {
+    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+    let message_id = query.message.as_ref().map(|m| m.id());
+    let data = query.data.as_deref().unwrap_or("");
+
+    let schedule_menu_delete = |cid: ChatId, mid: MessageId| {
+        game_commands::schedule_delete_message(bot.clone(), cid, mid);
+    };
+    if data == "menu:main" {
+        bot.answer_callback_query(query.id).await?;
+        if let Some(mid) = message_id {
+            bot.edit_message_text(chat_id, mid, "Выберите раздел:")
+                .reply_markup(menu_main_keyboard())
+                .await?;
+            schedule_menu_delete(chat_id, mid);
+        }
+        return Ok(());
+    }
+    if data == "menu:game" {
+        bot.answer_callback_query(query.id).await?;
+        if let Some(mid) = message_id {
+            bot.edit_message_text(chat_id, mid, "Игра Пидор Дня")
+                .reply_markup(menu_game_keyboard())
+                .await?;
+            schedule_menu_delete(chat_id, mid);
+        }
+        return Ok(());
+    }
+    if data == "menu:other" {
+        bot.answer_callback_query(query.id).await?;
+        if let Some(mid) = message_id {
+            bot.edit_message_text(chat_id, mid, "Прочее")
+                .reply_markup(menu_other_keyboard())
+                .await?;
+            schedule_menu_delete(chat_id, mid);
+        }
+        return Ok(());
+    }
+    if data == "menu:admin" {
+        let user_id = query.from.id.0 as u64;
+        if chat_id.0 >= 0 {
+            bot.answer_callback_query(query.id)
+                .text("Раздел только для групповых чатов.")
+                .await?;
+            return Ok(());
+        }
+        if !game_commands::is_chat_admin(&bot, chat_id, user_id).await {
+            bot.answer_callback_query(query.id)
+                .text("Только для администраторов чата.")
+                .await?;
+            return Ok(());
+        }
+        bot.answer_callback_query(query.id).await?;
+        if let Some(mid) = message_id {
+            bot.edit_message_text(chat_id, mid, "Администрирование")
+                .reply_markup(menu_admin_keyboard())
+                .await?;
+            schedule_menu_delete(chat_id, mid);
+        }
+        return Ok(());
+    }
+    if let Some(action) = data.strip_prefix("menu:action:") {
+        bot.answer_callback_query(query.id).await?;
+        match action {
+            "pidorules" => {
+                let invoker = if chat_id.0 < 0 {
+                    Some(query.from.id.0 as i64)
+                } else {
+                    None
+                };
+                if let Ok(tg_user) = crate::db::user::upsert_tg_user(&pool, &query.from).await {
+                    let _ = crate::db::game::record_chat_member(&pool, chat_id.0, tg_user.id).await;
+                }
+                game_commands::send_pidorules(&bot, chat_id, invoker).await?;
+            }
+            "pidorstats" => {
+                game_commands::send_pidorstats(&bot, &pool, chat_id).await?;
+            }
+            "pidorall" => {
+                game_commands::send_pidorall(&bot, &pool, chat_id).await?;
+            }
+            "about" => {
+                about::send_about(&bot, chat_id).await?;
+            }
+            "pidorset" => {
+                let user_id = query.from.id.0 as u64;
+                if chat_id.0 >= 0 {
+                    bot.send_message(chat_id, "Настройки автопидора только в групповых чатах.")
+                        .await?;
+                } else if !game_commands::is_chat_admin(&bot, chat_id, user_id).await {
+                    bot.send_message(chat_id, "Только администраторы чата могут менять настройки.")
+                        .await?;
+                } else if let Some(mid) = message_id {
+                    if let Err(e) = game_commands::edit_message_to_pidorset(&bot, &pool, chat_id, mid).await {
+                        tracing::warn!("edit_message_to_pidorset failed, sending new message: {:?}", e);
+                        game_commands::send_pidorset_message(&bot, &pool, chat_id).await?;
+                    } else {
+                        schedule_menu_delete(chat_id, mid);
+                    }
+                } else {
+                    game_commands::send_pidorset_message(&bot, &pool, chat_id).await?;
+                }
+            }
+            "pidorcall" => {
+                let user_id = query.from.id.0 as u64;
+                if chat_id.0 >= 0 {
+                    bot.send_message(chat_id, "Команда только для групповых чатов.")
+                        .await?;
+                } else if !game_commands::is_chat_admin(&bot, chat_id, user_id).await {
+                    bot.send_message(chat_id, "Только администраторы чата могут вызывать эту команду.")
+                        .await?;
+                } else {
+                    game_commands::send_pidorcall_message(&bot, &pool, chat_id).await?;
+                }
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }

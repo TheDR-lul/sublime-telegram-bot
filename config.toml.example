@@ -1,0 +1,5 @@
+# Copy to config.toml and fill in. Do not commit config.toml (it is in .gitignore).
+telegram_token = "YOUR_BOT_TOKEN"
+# Optional: token for notification/watchdog bot (alerts and success messages)
+notification_bot_token = "YOUR_NOTIFICATION_BOT_TOKEN"
+database_url = "postgresql://postgres:postgres@localhost:5432/sublime_bot"

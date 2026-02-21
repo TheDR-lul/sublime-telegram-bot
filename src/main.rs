@@ -15,6 +15,8 @@ async fn main() -> Result<(), AppError> {
         Some(Cmd::Config(c)) => run_config(c, cli.config),
         Some(Cmd::Migrate) => run_migrate(cli.config).await,
         Some(Cmd::Commands(CommandsCmd::Set)) => run_commands_set(cli.config).await,
+        Some(Cmd::Watchdog(WatchdogCmd::Run)) => run_watchdog_bot().await,
+        Some(Cmd::Watchdog(WatchdogCmd::Commands)) => run_watchdog_commands_set().await,
     }
 }
 
@@ -163,16 +165,15 @@ async fn run_migrate(config_path: Option<std::path::PathBuf>) -> Result<(), AppE
 
 async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(), AppError> {
     let cfg = Config::load(config_path)?;
-    use teloxide::types::BotCommand;
+    use teloxide::payloads::SetMyCommandsSetters;
+    use teloxide::types::{BotCommand, BotCommandScope};
     let commands = [
-        BotCommand::new("slap", "simulate /slap command from IRC"),
+        BotCommand::new("menu", "menu with sections"),
+        BotCommand::new("about", "about bot and repo"),
+        BotCommand::new("slap", "slap someone by replying to their message"),
         BotCommand::new("me", "simulate /me command from IRC"),
         BotCommand::new("shrug", "shrug ¯\\_(ツ)_/¯"),
         BotCommand::new("google", "<query> let me google that for you"),
-        BotCommand::new("get", "<key> get specific entry by key"),
-        BotCommand::new("list", "list entries for current chat"),
-        BotCommand::new("set", "<key> <value> set specific value for key"),
-        BotCommand::new("del", "<key> remove specific key"),
         BotCommand::new("pidor", "play the game, see /pidorules first"),
         BotCommand::new("pidorules", "POTD game rules"),
         BotCommand::new("pidoreg", "register to the POTD game"),
@@ -184,13 +185,145 @@ async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(),
         BotCommand::new("memeru", "get some random russian meme"),
         BotCommand::new("ttvideo", "get video from tiktok"),
         BotCommand::new("ttlink", "get depersonalized tiktok link"),
-        BotCommand::new("about", "some info about github repo"),
         BotCommand::new("achievements", "show your achievements"),
         BotCommand::new("pidorscan", "scan someone with pidor-detector"),
     ];
     let bot = teloxide::Bot::new(&cfg.telegram_token);
-    bot.set_my_commands(commands).await?;
+    // Set same commands for default (fallback), all private chats, and all group/supergroup chats.
+    bot.set_my_commands(commands.clone())
+        .scope(BotCommandScope::Default)
+        .await?;
+    bot.set_my_commands(commands.clone())
+        .scope(BotCommandScope::AllPrivateChats)
+        .await?;
+    bot.set_my_commands(commands.clone())
+        .scope(BotCommandScope::AllGroupChats)
+        .await?;
     let me = bot.get_me().await?;
-    println!("Updated commands for @{}", me.username.as_deref().unwrap_or("bot"));
+    println!("Updated commands for @{} (default, private, group chats)", me.username.as_deref().unwrap_or("bot"));
+    Ok(())
+}
+
+/// Set notification bot menu commands only (/status, /stats). Use NOTIFICATION_BOT_TOKEN.
+async fn run_watchdog_commands_set() -> Result<(), AppError> {
+    use teloxide::payloads::SetMyCommandsSetters;
+    use teloxide::types::{BotCommand, BotCommandScope};
+
+    let token = std::env::var("NOTIFICATION_BOT_TOKEN")
+        .map_err(|_| AppError::Config("NOTIFICATION_BOT_TOKEN required".into()))?;
+    let bot = teloxide::Bot::new(&token);
+    let commands = [
+        BotCommand::new("status", "is main bot running"),
+        BotCommand::new("stats", "chats and users count"),
+    ];
+    bot.set_my_commands(commands.clone())
+        .scope(BotCommandScope::Default)
+        .await?;
+    bot.set_my_commands(commands.clone())
+        .scope(BotCommandScope::AllPrivateChats)
+        .await?;
+    let me = bot.get_me().await?;
+    println!("Watchdog commands set for @{}", me.username.as_deref().unwrap_or("bot"));
+    Ok(())
+}
+
+/// Run minimal notification bot: /status (is main bot up), /stats (chats + users if DATABASE_URL set).
+/// Requires NOTIFICATION_BOT_TOKEN; optional WATCHDOG_CONTAINER, DATABASE_URL for /stats.
+async fn run_watchdog_bot() -> Result<(), AppError> {
+    use teloxide::types::Message;
+
+    let token = std::env::var("NOTIFICATION_BOT_TOKEN")
+        .map_err(|_| AppError::Config("NOTIFICATION_BOT_TOKEN required for watchdog".into()))?;
+    let container = std::env::var("WATCHDOG_CONTAINER").unwrap_or_else(|_| "sublime-bot".to_string());
+    let database_url = std::env::var("DATABASE_URL").ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
+    let bot = teloxide::Bot::new(&token);
+
+    // Set menu commands for this bot
+    if let Err(e) = run_watchdog_commands_set().await {
+        tracing::warn!("Watchdog set_my_commands failed: {:?}", e);
+    }
+
+    let pool = if let Some(ref url) = database_url {
+        match sqlx::postgres::PgPoolOptions::new()
+            .connect(url)
+            .await
+        {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!("Watchdog DATABASE_URL connect failed: {:?}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    async fn status_handler(bot: teloxide::Bot, msg: Message, container: String) -> Result<(), AppError> {
+        let running = check_container_running(&container);
+        let status = if running { "Бот работает." } else { "Бот не запущен." };
+        bot.send_message(msg.chat.id, status).await?;
+        Ok(())
+    }
+
+    async fn stats_handler(
+        bot: teloxide::Bot,
+        msg: Message,
+        pool: Option<sqlx::PgPool>,
+    ) -> Result<(), AppError> {
+        let text = if let Some(ref pool) = pool {
+            let chats: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM game")
+                .fetch_one(pool)
+                .await
+                .unwrap_or((0,));
+            let users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tguser")
+                .fetch_one(pool)
+                .await
+                .unwrap_or((0,));
+            format!(
+                "Чатов с ботом: {}\nУникальных пользователей: {}",
+                chats.0, users.0
+            )
+        } else {
+            "Статистика недоступна (не задан DATABASE_URL).".to_string()
+        };
+        bot.send_message(msg.chat.id, text).await?;
+        Ok(())
+    }
+
+    use teloxide::dispatching::UpdateFilterExt;
+    use teloxide::types::Update;
+    let container_clone = container.clone();
+    let pool_clone = pool.clone();
+    let schema = Update::filter_message()
+        .filter(|msg: Message| {
+            msg.text()
+                .map(|t| {
+                    let t = t.trim();
+                    t.starts_with("/status") || t.eq_ignore_ascii_case("status")
+                        || t.starts_with("/stats") || t.eq_ignore_ascii_case("stats")
+                })
+                .unwrap_or(false)
+        })
+        .endpoint(move |bot: teloxide::Bot, msg: Message| {
+            let text = msg.text().map(|s| s.to_string()).unwrap_or_default();
+            let container = container_clone.clone();
+            let pool = pool_clone.clone();
+            async move {
+                if text.trim().starts_with("/status") || text.trim().eq_ignore_ascii_case("status") {
+                    status_handler(bot, msg, container).await
+                } else {
+                    stats_handler(bot, msg, pool).await
+                }
+            }
+        });
+
+    let mut disp = teloxide::dispatching::Dispatcher::builder(bot, schema).build();
+    tracing::info!("Watchdog bot started (/status, /stats)");
+    disp.dispatch().await;
     Ok(())
 }

@@ -1,7 +1,9 @@
 # Deploy: build image locally, copy only image tar + compose to server, run there.
 param(
     [Parameter(Mandatory = $false)]
-    [string]$TelegramBotToken
+    [string]$TelegramBotToken,
+    [Parameter(Mandatory = $false)]
+    [string]$NotificationBotToken
 )
 
 $Server       = "5.189.154.71"
@@ -12,11 +14,13 @@ $SshOpts      = "-o StrictHostKeyChecking=accept-new"
 $ImageName    = "sublime-bot:latest"
 $ImageTar     = "sublime-bot.tar"
 
-# Resolve token
+# Resolve tokens
 if (-not $TelegramBotToken -and $env:TELEGRAM_BOT_TOKEN) { $TelegramBotToken = $env:TELEGRAM_BOT_TOKEN }
-if (-not $TelegramBotToken -and (Test-Path "config.toml")) {
-    $line = Get-Content "config.toml" | Where-Object { $_ -match 'telegram_token\s*=\s*"([^"]+)"' } | Select-Object -First 1
-    if ($line -match 'telegram_token\s*=\s*"([^"]+)"') { $TelegramBotToken = $Matches[1] }
+if (-not $NotificationBotToken -and $env:NOTIFICATION_BOT_TOKEN) { $NotificationBotToken = $env:NOTIFICATION_BOT_TOKEN }
+if (Test-Path "config.toml") {
+    $config = Get-Content "config.toml" -Raw
+    if (-not $TelegramBotToken -and $config -match 'telegram_token\s*=\s*"([^"]+)"') { $TelegramBotToken = $Matches[1] }
+    if (-not $NotificationBotToken -and $config -match 'notification_bot_token\s*=\s*"([^"]+)"') { $NotificationBotToken = $Matches[1] }
 }
 if (-not $TelegramBotToken) {
     Write-Error "Set TelegramBotToken (param, env TELEGRAM_BOT_TOKEN, or config.toml)"
@@ -37,14 +41,24 @@ if ($LASTEXITCODE -ne 0) { Write-Error "Docker save failed"; exit 1 }
 $sizeMb = [math]::Round((Get-Item $ImageTar).Length / 1MB, 1)
 Write-Host "  Image size: $sizeMb MB" -ForegroundColor DarkGray
 
-Write-Host "== 3/4. Copying to server (1 archive + 1 file) ==" -ForegroundColor Cyan
+Write-Host "== 3/4. Copying to server (image + compose + watchdog script) ==" -ForegroundColor Cyan
 ssh $SshOpts $Target "mkdir -p $RemoteDir"
 scp $SshOpts $ImageTar "${Target}:${RemoteDir}/"
 scp $SshOpts "docker-compose.deploy.yml" "${Target}:${RemoteDir}/"
+if (Test-Path "scripts/watchdog-telegram.sh") { scp $SshOpts "scripts/watchdog-telegram.sh" "${Target}:${RemoteDir}/" }
 if ($LASTEXITCODE -ne 0) { Write-Error "scp failed"; exit 1 }
 
+if ($NotificationBotToken) {
+    Write-Host "Writing NOTIFICATION_BOT_TOKEN to server .env.watchdog" -ForegroundColor Cyan
+    $watchdogEnv = "export NOTIFICATION_BOT_TOKEN='$($NotificationBotToken -replace "'", "'\''")'"
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllText($tempFile, $watchdogEnv)
+    scp $SshOpts $tempFile "${Target}:${RemoteDir}/.env.watchdog"
+    ssh $SshOpts $Target "chmod 600 $RemoteDir/.env.watchdog"
+    Remove-Item $tempFile -ErrorAction SilentlyContinue
+}
+
 Write-Host "== 4/4. Loading image and starting on server ==" -ForegroundColor Cyan
-# Escape token for bash single-quoted string ( ' -> '\'' )
 $tokenForBash = $TelegramBotToken -replace "'", "'\''"
 $remoteCmd = @"
 set -e
@@ -56,12 +70,15 @@ COMPOSE='docker compose -f docker-compose.deploy.yml'; command -v docker-compose
 `$COMPOSE up -d
 `$COMPOSE run --rm bot /app/sublime migrate
 `$COMPOSE run --rm bot /app/sublime commands set
+if [ -f .env.watchdog ] && . .env.watchdog 2>/dev/null && [ -n "`$NOTIFICATION_BOT_TOKEN" ]; then
+  `$COMPOSE run --rm -e NOTIFICATION_BOT_TOKEN bot /app/sublime watchdog commands
+  `$COMPOSE --profile watchdog up -d
+fi
 echo Done.
 "@
 ssh $SshOpts $Target $remoteCmd
 if ($LASTEXITCODE -ne 0) { Write-Error "Remote run failed"; exit 1 }
 
-# Optional: remove local tar to free space
 Remove-Item $ImageTar -ErrorAction SilentlyContinue
 
 Write-Host "`nDeploy finished. Check: ssh $Target 'docker ps'" -ForegroundColor Green

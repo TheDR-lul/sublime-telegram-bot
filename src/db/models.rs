@@ -38,6 +38,10 @@ impl TgUser {
 pub struct Game {
     pub id: i32,
     pub chat_id: i64,
+    pub autorun_enabled: bool,
+    pub autorun_morning: bool,
+    pub autorun_day: bool,
+    pub autorun_evening: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -53,6 +57,7 @@ pub struct GameResult {
     pub winner_id: i32,
     pub year: i32,
     pub day: i32,
+    pub slot: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
