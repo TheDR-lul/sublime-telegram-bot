@@ -160,7 +160,12 @@ pub async fn pidorscan_handler(
     bot: Bot,
     msg: Message,
     cmd: crate::handlers::commands::Cmd,
+    dedup: std::sync::Arc<crate::dedup::PidorscanDedup>,
 ) -> Result<(), AppError> {
+    // Avoid duplicate replies when the same update is processed twice (e.g. webhook retry).
+    if !dedup.try_acquire(msg.chat.id.0, msg.id.0).await {
+        return Ok(());
+    }
     let target_name = if let Some(reply) = msg.reply_to_message() {
         reply
             .from

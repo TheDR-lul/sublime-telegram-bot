@@ -2,7 +2,7 @@
 //! runs migrations, then runs all command and RPG tests. Requires Docker.
 //! Run: `cargo test --test full_auto`
 
-use sublime::{config::Config, dispatcher};
+use sublime::{config::Config, dedup, dispatcher};
 use teloxide::dptree;
 use teloxide_tests::{MockBot, MockCallbackQuery, MockMessageText, MockPrivateChat, MockUser};
 use testcontainers::runners::AsyncRunner;
@@ -71,7 +71,7 @@ async fn full_auto_all() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     // /about
     let msg = MockMessageText::new().text("/about").from(test_user()).chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool.clone(), config.clone()]);
+    bot.dependencies(dptree::deps![pool.clone(), config.clone(), std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let text = r.sent_messages.last().and_then(|m| m.text()).unwrap_or_default();

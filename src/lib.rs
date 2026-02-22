@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 pub mod db;
+pub mod dedup;
 pub mod dispatcher;
 pub mod error;
 pub mod handlers;

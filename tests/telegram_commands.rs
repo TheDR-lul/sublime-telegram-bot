@@ -1,7 +1,7 @@
 //! Integration tests: all Telegram commands and RPG callback chains (teloxide_tests).
 //! Requires DATABASE_URL and running Postgres. Run: `cargo test --test telegram_commands -- --ignored`
 
-use sublime::{config::Config, dispatcher};
+use sublime::{config::Config, dedup, dispatcher};
 use teloxide::dptree;
 use teloxide_tests::{MockBot, MockCallbackQuery, MockMessageText, MockPrivateChat, MockUser};
 
@@ -51,7 +51,7 @@ async fn command_about_sends_github_link() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -68,7 +68,7 @@ async fn command_hello_sends_greeting() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -85,7 +85,7 @@ async fn command_shrug_sends_shrug() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -102,7 +102,7 @@ async fn command_echo_echoes_text() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -119,7 +119,7 @@ async fn command_slap_sends_slap_text() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -136,7 +136,7 @@ async fn command_me_sends_action_text() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -153,7 +153,7 @@ async fn command_pidorules_sends_rules() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -170,7 +170,7 @@ async fn command_rpg_sends_menu() {
         .from(test_user())
         .chat(test_chat());
     let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool.clone(), config]);
+    bot.dependencies(dptree::deps![pool.clone(), config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     let last = r.sent_messages.last().expect("one message");
@@ -189,7 +189,7 @@ async fn rpg_callback_profile_open_edits_to_profile() {
         .data("rpg:profile:open")
         .from(test_user());
     let mut bot = MockBot::new(cb, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     assert!(
@@ -210,7 +210,7 @@ async fn rpg_callback_world_open_edits_to_world_map() {
         .data("rpg:world:open")
         .from(test_user());
     let mut bot = MockBot::new(cb, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     assert!(
@@ -227,7 +227,7 @@ async fn rpg_callback_inventory_open_edits_to_inventory() {
         .data("rpg:inventory:open")
         .from(test_user());
     let mut bot = MockBot::new(cb, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     assert!(
@@ -244,7 +244,7 @@ async fn rpg_callback_guild_open_edits_or_sends() {
         .data("rpg:guild:open")
         .from(test_user());
     let mut bot = MockBot::new(cb, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool, config]);
+    bot.dependencies(dptree::deps![pool, config, std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let r = bot.get_responses();
     assert!(
@@ -267,7 +267,7 @@ async fn rpg_chain_main_then_profile_then_world() {
         .from(user.clone())
         .chat(chat.clone());
     let mut bot = MockBot::new(msg1, dispatcher::build_test_schema());
-    bot.dependencies(dptree::deps![pool.clone(), config.clone()]);
+    bot.dependencies(dptree::deps![pool.clone(), config.clone(), std::sync::Arc::new(dedup::PidorscanDedup::new(2))]);
     bot.dispatch().await;
     let sent1 = bot.get_responses().sent_messages.last().expect("rpg sends menu").clone();
 

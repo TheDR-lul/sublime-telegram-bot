@@ -18,8 +18,10 @@ FROM debian:bullseye-slim
 
 WORKDIR /app
 
-# ca-certificates for HTTPS; docker.io (CLI) for watchdog container to run "docker ps"
-RUN apt-get update && apt-get install -y ca-certificates docker.io && rm -rf /var/lib/apt/lists/*
+# ca-certificates for HTTPS; Docker CLI (static binary) for watchdog /status (host daemon needs API 1.44+)
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz | tar xz -C /tmp \
+  && mv /tmp/docker/docker /usr/bin/docker && rm -rf /tmp/docker
 
 COPY --from=builder /app/target/release/sublime /app/sublime
 COPY --from=builder /app/config.toml /app/config.toml

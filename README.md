@@ -183,6 +183,11 @@ See `ansible/deploy-playbook.yml` for deployment automation.
 
 To get **alerts when the bot crashes** on a remote server (e.g. Telegram message when the container is down), see [docs/MONITORING.md](docs/MONITORING.md): watchdog script + optional Sentry for errors.
 
+## Troubleshooting
+
+- **Messages show as "Group Anonymous Bot" instead of channel name**  
+  This is a Telegram setting: the bot is added as an "Anonymous" admin. To show the channel name, add the bot as a normal (non-anonymous) admin, or link the group to the channel and give the bot permission to post as the channel in the group's settings.
+
 ## License
 
 MIT

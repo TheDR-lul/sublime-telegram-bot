@@ -47,6 +47,9 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
 
     let full_schema = sublime::dispatcher::build_schema();
 
+    // Deduplication for /pidorscan to avoid duplicate messages when the same update is processed twice.
+    let pidorscan_dedup = std::sync::Arc::new(sublime::dedup::PidorscanDedup::new(2));
+
     // Background autorun for daily Pidor game (Kyiv timezone, 3 times per day).
     {
         let bot_clone = bot.clone();
@@ -58,7 +61,7 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
     }
 
     let mut disp = teloxide::dispatching::Dispatcher::builder(bot.clone(), full_schema)
-        .dependencies(teloxide::dptree::deps![pool, cfg])
+        .dependencies(teloxide::dptree::deps![pool, cfg, pidorscan_dedup])
         .error_handler(teloxide::error_handlers::LoggingErrorHandler::with_custom_text(
             "Handler error (command or callback failed)",
         ))
@@ -234,41 +237,39 @@ fn parse_docker_inspect_running(stdout: &[u8]) -> bool {
     s.eq_ignore_ascii_case("true")
 }
 
-/// Check if the main bot container is running. Tries docker inspect first, then docker ps as fallback.
-/// Uses /usr/bin/docker when "docker" is not in PATH (e.g. in minimal container).
+/// Docker socket when running inside container with mounted docker.sock
+const DOCKER_SOCKET: &str = "unix:///var/run/docker.sock";
+
+/// Check if the main bot container is running. Uses docker ps first (reliable in watchdog container),
+/// then docker inspect. Passes -H unix:///var/run/docker.sock so the CLI uses the mounted socket.
 fn check_container_running(container: &str) -> bool {
     let docker_binaries = ["/usr/bin/docker", "docker"];
-    for bin in &docker_binaries {
-        let out = std::process::Command::new(*bin)
-            .args(["inspect", "-f", "{{.State.Running}}", container])
-            .output();
-        match out {
-            Ok(o) if o.status.success() => {
-                if parse_docker_inspect_running(&o.stdout) {
+
+    let run_ps = |args: &[&str]| {
+        for bin in &docker_binaries {
+            let mut full_args = vec!["-H", DOCKER_SOCKET];
+            full_args.extend(args.iter().copied());
+            let out = std::process::Command::new(*bin).args(&full_args).output();
+            if let Ok(o) = out {
+                if o.status.success() && !o.stdout.is_empty() {
                     return true;
                 }
-                return false;
-            }
-            Ok(o) => {
-                tracing::debug!(
-                    "docker inspect failed ({}): stderr={}",
-                    o.status,
-                    String::from_utf8_lossy(&o.stderr)
-                );
-            }
-            Err(e) => {
-                tracing::debug!("docker inspect command failed: {:?}", e);
             }
         }
+        false
+    };
+
+    if run_ps(&["ps", "-q", "--filter", &format!("name={}", container)]) {
+        return true;
     }
-    // Fallback: docker ps -q --filter name=CONTAINER (match by name substring)
+
     for bin in &docker_binaries {
         let out = std::process::Command::new(*bin)
-            .args(["ps", "-q", "--filter", &format!("name={}", container)])
+            .args(["-H", DOCKER_SOCKET, "inspect", "-f", "{{.State.Running}}", container])
             .output();
         if let Ok(o) = out {
-            if o.status.success() && !o.stdout.is_empty() {
-                return true;
+            if o.status.success() {
+                return parse_docker_inspect_running(&o.stdout);
             }
         }
     }

@@ -59,10 +59,10 @@ pub fn build_message_schema() -> teloxide::dispatching::UpdateHandler<AppError> 
 }
 
 /// Full test schema: messages (all commands) and callback queries in one endpoint
-/// so MockBot only needs Update, Bot, PgPool, Config.
+/// so MockBot only needs Update, Bot, PgPool, Config, PidorscanDedup.
 pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     dptree::entry().endpoint(
-        |update: Update, bot: Bot, pool: PgPool, config: Config| async move {
+        |update: Update, bot: Bot, pool: PgPool, config: Config, dedup: std::sync::Arc<crate::dedup::PidorscanDedup>| async move {
             match update.kind {
                 UpdateKind::Message(msg) => {
                     let text = match msg.text() {
@@ -81,7 +81,7 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Me(_) => misc::me_handler(bot, msg, cmd).await,
                         Cmd::Google(_) => misc::google_handler(bot, msg, cmd).await,
                         Cmd::Rpg => misc::rpg_disabled_handler(bot, msg, cmd).await,
-                        Cmd::Pidorscan(_) => misc::pidorscan_handler(bot, msg, cmd).await,
+                        Cmd::Pidorscan(_) => misc::pidorscan_handler(bot, msg, cmd, dedup).await,
                         Cmd::Pidor => game::pidor_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorules => game::pidorules_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidoreg => game::pidoreg_handler(bot, msg, cmd, pool).await,
@@ -115,7 +115,9 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         .branch(case![Cmd::Google(_s)].endpoint(misc::google_handler))
         // RPG: development for future — disabled; show stub message
         .branch(case![Cmd::Rpg].endpoint(misc::rpg_disabled_handler))
-        .branch(case![Cmd::Pidorscan(_s)].endpoint(misc::pidorscan_handler))
+        .branch(case![Cmd::Pidorscan(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, dedup: std::sync::Arc<crate::dedup::PidorscanDedup>| async move {
+            misc::pidorscan_handler(bot, msg, cmd, dedup).await
+        }))
         .branch(case![Cmd::Pidor].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidor_handler(bot, msg, cmd, pool).await
         }))
