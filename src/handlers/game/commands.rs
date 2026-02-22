@@ -159,6 +159,10 @@ pub async fn pidoreg_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
+
     let chat_id = msg.chat.id.0;
     let from_user = match msg.from.as_ref() {
         Some(u) => u,
@@ -175,10 +179,11 @@ pub async fn pidoreg_handler(
     let tg_user = user::upsert_tg_user(&pool, from_user).await?;
     let game = game::get_or_create_game(&pool, chat_id).await?;
 
-    game::record_chat_member(&pool, chat_id, tg_user.id).await?;
-
-    let is_player = game::is_player_in_game(&pool, game.id, tg_user.id).await?;
-    if is_player {
+    // Check by Telegram id from message so we never miss "already registered" (roast).
+    let players = game::get_players(&pool, game.id).await?;
+    let tg_id_i64 = from_user.id.0 as i64;
+    let already_registered = players.iter().any(|p| p.tg_id == tg_id_i64);
+    if already_registered {
         let username = escape_html(&from_user.full_name());
         let phrase = already_registered_roasts::PHRASES
             .choose(&mut rand::rng())
@@ -189,10 +194,10 @@ pub async fn pidoreg_handler(
             .await?;
         return Ok(());
     }
-    
+
+    game::record_chat_member(&pool, chat_id, tg_user.id).await?;
     game::add_player(&pool, game.id, tg_user.id).await?;
     let players = game::get_players(&pool, game.id).await?;
-    
     if players.is_empty() {
         let username = from_user.full_name();
         bot.send_message(msg.chat.id, text_static::ERROR_ZERO_PLAYERS.replace("{username}", &escape_html(&username)))
@@ -221,6 +226,9 @@ pub async fn pidorunreg_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
     let chat_id = msg.chat.id.0;
     let from_user = msg.from.as_ref().ok_or_else(|| AppError::Config("No from user".into()))?;
     
@@ -252,6 +260,9 @@ pub async fn pidor_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
     let chat_id = msg.chat.id;
     if let Some(ref from) = msg.from {
         let tg_user = user::upsert_tg_user(&pool, from).await?;
@@ -521,6 +532,9 @@ pub async fn pidorstats_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
     let chat_id = msg.chat.id.0;
     let game = game::get_or_create_game(&pool, chat_id).await?;
     let current_dt = current_datetime_kyiv();
@@ -545,6 +559,9 @@ pub async fn pidorall_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
     let chat_id = msg.chat.id.0;
     let game = game::get_or_create_game(&pool, chat_id).await?;
     
@@ -567,6 +584,9 @@ pub async fn pidorme_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
     let chat_id = msg.chat.id.0;
     let from_user = msg.from.as_ref().ok_or_else(|| AppError::Config("No from user".into()))?;
     
@@ -660,8 +680,6 @@ pub async fn is_chat_admin(bot: &Bot, chat_id: ChatId, user_id: u64) -> bool {
 
 pub async fn pidorset_handler(bot: Bot, msg: Message, pool: PgPool) -> Result<(), AppError> {
     if !msg.chat.is_group() && !msg.chat.is_supergroup() {
-        bot.send_message(msg.chat.id, "Настройки автопидора только в групповых чатах.")
-            .await?;
         return Ok(());
     }
     let from_user = match msg.from.as_ref() {

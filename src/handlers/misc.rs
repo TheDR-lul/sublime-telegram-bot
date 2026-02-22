@@ -346,36 +346,37 @@ pub async fn inline_handler(
     Ok(())
 }
 
+/// Single-column layout so buttons render evenly on narrow screens (mobile).
 fn menu_main_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        vec![
-            InlineKeyboardButton::callback("Игра Пидор дня", "menu:game"),
-            InlineKeyboardButton::callback("Прочее", "menu:other"),
-        ],
-        vec![InlineKeyboardButton::callback("Администрирование", "menu:admin")],
+        vec![InlineKeyboardButton::callback("🎮 Игра", "menu:game")],
+        vec![InlineKeyboardButton::callback("📋 Прочее", "menu:other")],
+        vec![InlineKeyboardButton::callback("⚙ Админ", "menu:admin")],
     ])
 }
 
 fn menu_admin_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback("Настройки автопидора", "menu:action:pidorset")],
-        vec![InlineKeyboardButton::callback("Позвать незарегистрированных", "menu:action:pidorcall")],
+        vec![InlineKeyboardButton::callback("🔧 Настройки автопидора", "menu:action:pidorset")],
+        vec![InlineKeyboardButton::callback("📢 Позвать участников", "menu:action:pidorcall")],
         vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
     ])
 }
 
 fn menu_game_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback("Правила", "menu:action:pidorules")],
-        vec![InlineKeyboardButton::callback("Статистика за год", "menu:action:pidorstats")],
-        vec![InlineKeyboardButton::callback("Статистика за всё время", "menu:action:pidorall")],
+        vec![InlineKeyboardButton::callback("📜 Правила", "menu:action:pidorules")],
+        vec![
+            InlineKeyboardButton::callback("📊 За год", "menu:action:pidorstats"),
+            InlineKeyboardButton::callback("📊 Всё время", "menu:action:pidorall"),
+        ],
         vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
     ])
 }
 
 fn menu_other_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback("О боте", "menu:action:about")],
+        vec![InlineKeyboardButton::callback("ℹ О боте", "menu:action:about")],
         vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
     ])
 }
