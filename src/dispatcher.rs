@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::error::AppError;
 use crate::handlers::{
     about, achievements as achievements_handler, commands::Cmd, game::commands as game,
-    meme, misc, tiktok,
+    game::duel as game_duel, meme, misc, tiktok,
 };
 
 async fn callback_router(
@@ -31,6 +31,12 @@ async fn callback_router(
     }
     if data.starts_with("settings:") {
         return game::pidorset_callback(bot, query, pool).await;
+    }
+    if data.starts_with("duel_accept:") {
+        return game_duel::duel_accept_callback(bot, query, pool).await;
+    }
+    if data.starts_with("duel:") {
+        return game_duel::duel_move_callback(bot, query, pool).await;
     }
     match data {
         "meme_en_refresh" => meme::meme_refresh_callback(bot, query).await,
@@ -95,6 +101,7 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Memeru => meme::memeru_handler(bot, msg, cmd, config).await,
                         Cmd::Ttvideo(_) => tiktok::tt_video_handler(bot, msg, cmd).await,
                         Cmd::Ttlink(_) => tiktok::tt_link_handler(bot, msg, cmd).await,
+                        Cmd::Pidorduel => game_duel::pidorduel_handler(bot, msg, cmd, pool).await,
                     }
                 }
                 UpdateKind::CallbackQuery(query) => callback_router(bot, query, pool, config).await,
@@ -126,6 +133,9 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }))
         .branch(case![Cmd::Pidorset].endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
             game::pidorset_handler(bot, msg, pool).await
+        }))
+        .branch(case![Cmd::Pidorduel].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            game_duel::pidorduel_handler(bot, msg, cmd, pool).await
         }))
         .branch(case![Cmd::Pidoreg].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidoreg_handler(bot, msg, cmd, pool).await

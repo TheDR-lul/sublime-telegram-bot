@@ -366,6 +366,7 @@ fn menu_admin_keyboard() -> InlineKeyboardMarkup {
 fn menu_game_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback("📜 Правила", "menu:action:pidorules")],
+        vec![InlineKeyboardButton::callback("⚔ Пидор-дуэль", "menu:action:pidorduel")],
         vec![
             InlineKeyboardButton::callback("📊 За год", "menu:action:pidorstats"),
             InlineKeyboardButton::callback("📊 Всё время", "menu:action:pidorall"),
@@ -518,6 +519,13 @@ pub async fn menu_callback(
                 } else {
                     game_commands::send_pidorcall_message(&bot, &pool, chat_id).await?;
                 }
+            }
+            "pidorduel" => {
+                bot.send_message(
+                    chat_id,
+                    "/pidorduel — искать любого соперника; ответь на сообщение юзера и напиши /pidorduel — вызвать конкретного. (1 мин на принятие.)",
+                )
+                .await?;
             }
             _ => {}
         }

@@ -120,3 +120,22 @@ pub struct Achievement {
     pub code: String,
     pub earned_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DuelGame {
+    pub id: i32,
+    pub chat_id: i64,
+    pub invite_message_id: Option<i64>,
+    pub message_id: Option<i64>,
+    pub challenger_tg_id: i64,
+    pub invited_tg_id: Option<i64>,
+    pub player1_tg_id: Option<i64>,
+    pub player2_tg_id: Option<i64>,
+    pub board: String,
+    pub cell_filled_at: String,
+    pub turn: i16,
+    pub status: String,
+    pub winner_tg_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub last_move_at: Option<DateTime<Utc>>,
+}

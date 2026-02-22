@@ -5,6 +5,7 @@ pub mod achievements;
 pub mod tiktok;
 pub mod user;
 pub mod rpg;
+pub mod duel;
 
 pub use game::*;
 pub use kv::*;
@@ -13,3 +14,4 @@ pub use achievements::*;
 pub use tiktok::*;
 pub use user::*;
 pub use rpg::*;
+pub use duel::*;

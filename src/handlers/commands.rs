@@ -45,6 +45,8 @@ pub enum Cmd {
     Pidorscan(String),
     #[command(description = "autorun settings (admins only)")]
     Pidorset,
+    #[command(description = "challenge to pidor duel (tic-tac-toe); reply to user for tagged challenge")]
+    Pidorduel,
     // RPG: development for future — disabled for now; /rpg shows stub message.
     #[command(description = "Pidor-Royale RPG (in development)")]
     Rpg,

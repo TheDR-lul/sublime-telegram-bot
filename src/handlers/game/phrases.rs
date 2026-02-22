@@ -132,6 +132,42 @@ pub mod already_registered_roasts {
     ];
 }
 
+/// Victory phrases for pidor duel. Placeholders: {winner}, {loser}. Symbolism: eggplant = member, peach = ass.
+pub mod duel_victory_phrases {
+    pub const PHRASES: &[&str] = &[
+        "{winner} загнал свой 🍆 в 🍑 {loser}",
+        "{winner} вогнал свой 🍆 в 🍑 {loser}",
+        "Загнал свой 🍆 в 🍑 {loser} — {winner}",
+        "{winner} всадил свой 🍆 в 🍑 {loser}",
+        "{loser} получил 🍆 от {winner} прямиком в 🍑",
+        "{winner} врубил свой 🍆 в 🍑 {loser}",
+        "{winner} засунул свой 🍆 в 🍑 {loser}",
+        "Прямо в 🍑 {loser} — это сделал {winner} со своим 🍆",
+        "{winner} довёл свой 🍆 до 🍑 {loser}",
+        "{loser} теперь с 🍆 {winner} в своей 🍑",
+        "{winner} метко попал своим 🍆 в 🍑 {loser}",
+        "{winner} вбил свой 🍆 в 🍑 {loser}",
+        "🍆 {winner} оказался в 🍑 {loser}",
+        "{winner} отправил свой 🍆 прямиком в 🍑 {loser}",
+    ];
+}
+
+/// Roasts for duel loser (pidor of the round). Placeholder: {username}.
+pub mod duel_roasts {
+    pub const PHRASES: &[&str] = &[
+        "Пидор раунда — <b>{username}</b>. Соболезную.",
+        "И вот он, пидор раунда: <b>{username}</b>.",
+        "<b>{username}</b> — пидор этого дуэля.",
+        "Поздравляем с званием пидора раунда: <b>{username}</b>.",
+        "<b>{username}</b> проиграл и получил звание пидора раунда.",
+        "Пидор раунда — не кто иной, как <b>{username}</b>.",
+        "<b>{username}</b>, ты пидор этого раунда. Держись.",
+        "И пидор раунда — <b>{username}</b>. Так бывает.",
+        "<b>{username}</b> официально признан пидором раунда.",
+        "Пидор дуэля — <b>{username}</b>. Не расстраивайся.",
+    ];
+}
+
 /// HTML templates for game messages. Placeholders: {username}, {year}, {player_stats}, {player_count}, {number}, {amount}, {player_list}.
 pub mod text_static {
     /// Autorun slot phrases (sudden morning/day/evening pidor).

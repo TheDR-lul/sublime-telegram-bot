@@ -59,6 +59,22 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
                 .await;
         });
     }
+    // Cancel expired duel challenges (1 min timeout).
+    {
+        let bot_clone = bot.clone();
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(45));
+            loop {
+                interval.tick().await;
+                if let Err(e) =
+                    sublime::handlers::game::duel::cancel_expired_duels(&bot_clone, &pool_clone).await
+                {
+                    tracing::debug!("cancel_expired_duels: {:?}", e);
+                }
+            }
+        });
+    }
 
     let mut disp = teloxide::dispatching::Dispatcher::builder(bot.clone(), full_schema)
         .dependencies(teloxide::dptree::deps![pool, cfg, pidorscan_dedup])
@@ -184,6 +200,8 @@ async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(),
         BotCommand::new("pidorstats", "POTD game stats for this year"),
         BotCommand::new("pidorall", "POTD game stats for all time"),
         BotCommand::new("pidorme", "POTD personal stats"),
+        BotCommand::new("pidorduel", "challenge to pidor duel (reply for tagged)"),
+        BotCommand::new("pidorset", "autorun settings (admins only)"),
         BotCommand::new("meme", "get some random meme"),
         BotCommand::new("memeru", "get some random russian meme"),
         BotCommand::new("ttvideo", "get video from tiktok"),

@@ -18,5 +18,5 @@ Thumbs.db
 .cursor/
 terminals/
 
-# Local config override (use COPY in Dockerfile or mount at run)
-# config.toml is copied; keep in context if you want it in image
+# Local config (secrets); image uses config.toml.example as default, runtime uses env vars
+config.toml

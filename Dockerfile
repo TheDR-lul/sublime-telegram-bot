@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib
   && mv /tmp/docker/docker /usr/bin/docker && rm -rf /tmp/docker
 
 COPY --from=builder /app/target/release/sublime /app/sublime
-COPY --from=builder /app/config.toml /app/config.toml
+COPY config.toml.example /app/config.toml
 COPY --from=builder /app/migrations /app/migrations
 
 ENV RUST_LOG=info
