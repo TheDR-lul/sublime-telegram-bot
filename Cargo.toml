@@ -1,6 +1,6 @@
 [package]
 name = "sublime"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "Telegram bot (Rust, teloxide)"
 authors = ["sublime"]

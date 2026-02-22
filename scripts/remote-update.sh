@@ -34,7 +34,7 @@ command -v docker-compose &>/dev/null && COMPOSE='docker-compose -f docker-compo
 $COMPOSE up -d
 
 echo "== 4. Migrate =="
-$COMPOSE run --rm bot /app/sublime migrate || { echo "Migrate failed. Restore from $BACKUP_FILE if needed."; exit 1; }
+$COMPOSE run --rm bot /app/sublime migrate || { [ -f fix_checksum.sql ] && cat fix_checksum.sql | docker exec -i sublime-postgres psql -U postgres -d sublime_bot -f - 2>/dev/null; $COMPOSE run --rm bot /app/sublime migrate; } || { echo "Migrate failed. Restore from $BACKUP_FILE if needed."; exit 1; }
 
 echo "== 5. Set commands =="
 $COMPOSE run --rm bot /app/sublime commands set

@@ -37,7 +37,7 @@ Write-Host ""
 # --- 0. Copy scripts to server so backup/remote-update exist ---
 Write-Host "== 0. Sync scripts to server ==" -ForegroundColor Cyan
 ssh $SshOpts $Target "mkdir -p $RemoteDir $RemoteDir/backups"
-scp $SshOpts "scripts/remote-backup-db.sh" "scripts/remote-update.sh" "scripts/notify-update-success.sh" "${Target}:${RemoteDir}/"
+scp $SshOpts "scripts/remote-backup-db.sh" "scripts/remote-update.sh" "scripts/notify-update-success.sh" "scripts/fix_checksum.sql" "${Target}:${RemoteDir}/"
 ssh $SshOpts $Target "chmod +x $RemoteDir/remote-backup-db.sh $RemoteDir/remote-update.sh $RemoteDir/notify-update-success.sh"
 if (Test-Path "scripts/watchdog-telegram.sh") { scp $SshOpts "scripts/watchdog-telegram.sh" "${Target}:${RemoteDir}/" }
 
@@ -90,7 +90,7 @@ docker load -i $ImageTar
 export TELEGRAM_BOT_TOKEN='$tokenForBash'
 COMPOSE='docker compose -f docker-compose.deploy.yml'; command -v docker-compose &>/dev/null && COMPOSE='docker-compose -f docker-compose.deploy.yml'
 `$COMPOSE up -d
-`$COMPOSE run --rm bot /app/sublime migrate
+`$COMPOSE run --rm bot /app/sublime migrate || { cat fix_checksum.sql | docker exec -i sublime-postgres psql -U postgres -d sublime_bot -f - 2>/dev/null; `$COMPOSE run --rm bot /app/sublime migrate; }
 `$COMPOSE run --rm bot /app/sublime commands set
 if [ -f .env.watchdog ] && . .env.watchdog 2>/dev/null && [ -n "`$NOTIFICATION_BOT_TOKEN" ]; then
   `$COMPOSE run --rm -e NOTIFICATION_BOT_TOKEN bot /app/sublime watchdog commands

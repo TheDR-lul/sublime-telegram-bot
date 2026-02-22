@@ -33,7 +33,7 @@ Write-Host ""
 # 0. Sync scripts
 Write-Host "== 0. Sync scripts to server ==" -ForegroundColor Cyan
 ssh $SshOpts $Target "mkdir -p $RemoteDir $RemoteDir/backups"
-scp $SshOpts "scripts/remote-backup-db.sh" "scripts/remote-update.sh" "scripts/notify-update-success.sh" "${Target}:${RemoteDir}/"
+scp $SshOpts "scripts/remote-backup-db.sh" "scripts/remote-update.sh" "scripts/notify-update-success.sh" "scripts/fix_checksum.sql" "${Target}:${RemoteDir}/"
 ssh $SshOpts $Target "chmod +x $RemoteDir/remote-backup-db.sh $RemoteDir/remote-update.sh $RemoteDir/notify-update-success.sh"
 if (Test-Path "scripts/watchdog-telegram.sh") { scp $SshOpts "scripts/watchdog-telegram.sh" "${Target}:${RemoteDir}/" }
 

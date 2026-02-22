@@ -227,6 +227,54 @@ async fn run_watchdog_commands_set() -> Result<(), AppError> {
     Ok(())
 }
 
+/// Parse "docker inspect -f '{{.State.Running}}'" stdout to bool. Used by status check and tests.
+fn parse_docker_inspect_running(stdout: &[u8]) -> bool {
+    let binding = String::from_utf8_lossy(stdout);
+    let s = binding.trim();
+    s.eq_ignore_ascii_case("true")
+}
+
+/// Check if the main bot container is running. Tries docker inspect first, then docker ps as fallback.
+/// Uses /usr/bin/docker when "docker" is not in PATH (e.g. in minimal container).
+fn check_container_running(container: &str) -> bool {
+    let docker_binaries = ["/usr/bin/docker", "docker"];
+    for bin in &docker_binaries {
+        let out = std::process::Command::new(*bin)
+            .args(["inspect", "-f", "{{.State.Running}}", container])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                if parse_docker_inspect_running(&o.stdout) {
+                    return true;
+                }
+                return false;
+            }
+            Ok(o) => {
+                tracing::debug!(
+                    "docker inspect failed ({}): stderr={}",
+                    o.status,
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => {
+                tracing::debug!("docker inspect command failed: {:?}", e);
+            }
+        }
+    }
+    // Fallback: docker ps -q --filter name=CONTAINER (match by name substring)
+    for bin in &docker_binaries {
+        let out = std::process::Command::new(*bin)
+            .args(["ps", "-q", "--filter", &format!("name={}", container)])
+            .output();
+        if let Ok(o) = out {
+            if o.status.success() && !o.stdout.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Run minimal notification bot: /status (is main bot up), /stats (chats + users if DATABASE_URL set).
 /// Requires NOTIFICATION_BOT_TOKEN; optional WATCHDOG_CONTAINER, DATABASE_URL for /stats.
 async fn run_watchdog_bot() -> Result<(), AppError> {
@@ -326,4 +374,21 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
     tracing::info!("Watchdog bot started (/status, /stats)");
     disp.dispatch().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_docker_inspect_running;
+
+    #[test]
+    fn test_parse_docker_inspect_running() {
+        assert!(parse_docker_inspect_running(b"true"));
+        assert!(parse_docker_inspect_running(b"true\n"));
+        assert!(parse_docker_inspect_running(b"  true  \n"));
+        assert!(parse_docker_inspect_running(b"TRUE"));
+        assert!(!parse_docker_inspect_running(b"false"));
+        assert!(!parse_docker_inspect_running(b"false\n"));
+        assert!(!parse_docker_inspect_running(b""));
+        assert!(!parse_docker_inspect_running(b"something"));
+    }
 }
