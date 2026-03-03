@@ -139,3 +139,26 @@ pub struct DuelGame {
     pub created_at: DateTime<Utc>,
     pub last_move_at: Option<DateTime<Utc>>,
 }
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DuelElo {
+    pub id: i32,
+    pub chat_id: i64,
+    pub tg_id: i64,
+    pub elo: i32,
+    pub wins: i32,
+    pub losses: i32,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PidorBet {
+    pub id: i32,
+    pub chat_id: i64,
+    pub bettor_tg_id: i64,
+    pub target_tg_id: i64,
+    pub year: i32,
+    pub day: i32,
+    pub slot: String,
+    pub correct: Option<bool>,
+    pub created_at: DateTime<Utc>,
+}

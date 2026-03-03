@@ -258,6 +258,112 @@ pub async fn pidor_handler(
     run_pidor_game(&bot, &pool, chat_id, PidorRunKind::Manual).await
 }
 
+pub async fn pidorbet_handler(
+    bot: Bot,
+    msg: Message,
+    cmd: crate::handlers::commands::Cmd,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
+    let chat_id = msg.chat.id.0;
+    let from_user = match msg.from.as_ref() {
+        Some(u) => u,
+        None => return Ok(()),
+    };
+    let bettor_tg_id = from_user.id.0 as i64;
+
+    let tg_user = user::upsert_tg_user(&pool, from_user).await?;
+    let g = game::get_or_create_game(&pool, chat_id).await?;
+    let players = game::get_players(&pool, g.id).await?;
+    if !players.iter().any(|p| p.tg_id == bettor_tg_id) {
+        bot.send_message(msg.chat.id, "Сначала зарегистрируйся: /pidoreg")
+            .await?;
+        return Ok(());
+    }
+
+    let current_dt = current_datetime_kyiv();
+    let cur_year = current_dt.year();
+    let cur_day = current_dt.ordinal() as i32;
+    let slot = "manual";
+
+    if game::get_today_result_for_slot(&pool, g.id, cur_year, cur_day, slot).await?.is_some() {
+        bot.send_message(msg.chat.id, "Розыгрыш уже прошёл. Ставки на завтра принимаются завтра.")
+            .await?;
+        return Ok(());
+    }
+
+    let target_tg_id = extract_bet_target(&msg, &cmd);
+    let target_tg_id = match target_tg_id {
+        Some(id) if id == bettor_tg_id => id,
+        Some(id) => {
+            if !players.iter().any(|p| p.tg_id == id) {
+                bot.send_message(msg.chat.id, "Этот пользователь не зарегистрирован в игре.")
+                    .await?;
+                return Ok(());
+            }
+            id
+        }
+        None => {
+            bot.send_message(
+                msg.chat.id,
+                "Укажи на кого ставишь: /pidorbet @user или ответом на сообщение.",
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let _ = crate::db::bet::place_bet(&pool, chat_id, bettor_tg_id, target_tg_id, cur_year, cur_day, slot).await?;
+
+    let bettor_name = escape_html(&from_user.full_name());
+    let target_name = if target_tg_id == bettor_tg_id {
+        "себя".to_string()
+    } else {
+        let target_user = user::get_by_tg_id(&pool, target_tg_id).await?;
+        match target_user {
+            Some(u) => escape_html(&u.full_username(true)),
+            None => "???".to_string(),
+        }
+    };
+
+    bot.send_message(
+        msg.chat.id,
+        format!("🎲 <b>{}</b> ставит на {} как пидора дня!", bettor_name, target_name),
+    )
+    .parse_mode(teloxide::types::ParseMode::Html)
+    .await?;
+
+    if achievements::grant(&pool, tg_user.id, "bet_first").await? {
+        bot.send_message(msg.chat.id, "🏅 Новая ачивка: Букмекер (первая ставка).")
+            .await?;
+    }
+
+    Ok(())
+}
+
+fn extract_bet_target(msg: &Message, cmd: &crate::handlers::commands::Cmd) -> Option<i64> {
+    if let crate::handlers::commands::Cmd::Pidorbet(arg) = cmd {
+        let arg = arg.trim();
+        if !arg.is_empty() {
+            if let Some(entities) = msg.entities() {
+                for e in entities {
+                    if let teloxide::types::MessageEntityKind::TextMention { user } = &e.kind {
+                        return Some(user.id.0 as i64);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(reply) = msg.reply_to_message() {
+        if let Some(ref from) = reply.from {
+            return Some(from.id.0 as i64);
+        }
+    }
+    None
+}
+
 fn slot_str(slot: PidorAutorunSlot) -> &'static str {
     match slot {
         PidorAutorunSlot::Morning => "morning",
@@ -406,6 +512,49 @@ async fn run_pidor_game(
                 "🌙 Новая ачивка: Ночной пидор (победа ночью).",
             )
             .await?;
+        }
+    }
+
+    // Resolve bets
+    let winner_tg_id = winner.tg_id;
+    let correct_bets = crate::db::bet::resolve_bets(pool, chat_id_raw, cur_year, cur_day, slot, winner_tg_id).await?;
+    if !correct_bets.is_empty() {
+        let mut names = Vec::new();
+        for bet in &correct_bets {
+            let u = user::get_by_tg_id(pool, bet.bettor_tg_id).await?;
+            let name = u.map(|u| escape_html(&u.full_username(true))).unwrap_or_else(|| "???".to_string());
+            names.push(name);
+        }
+        let joined = names.join(", ");
+        bot.send_message(chat_id, format!("🎯 Угадал{}: {}!", if correct_bets.len() > 1 { "и" } else { "" }, joined))
+            .parse_mode(teloxide::types::ParseMode::Html)
+            .await?;
+
+        for bet in &correct_bets {
+            if let Some(uid) = crate::db::duel::user_id_by_tg_id(pool, bet.bettor_tg_id).await? {
+                let total_correct = crate::db::bet::count_correct_bets(pool, chat_id_raw, bet.bettor_tg_id).await?;
+                if total_correct >= 1 {
+                    if achievements::grant(pool, uid, "bet_correct_1").await? {
+                        bot.send_message(chat_id, "🏅 Новая ачивка: Пидор-аналитик (первое верное предсказание).").await?;
+                    }
+                }
+                if total_correct >= 3 {
+                    if achievements::grant(pool, uid, "bet_correct_3").await? {
+                        bot.send_message(chat_id, "🏅 Новая ачивка: Ясновидящий (3 верных предсказания).").await?;
+                    }
+                }
+                if bet.bettor_tg_id == bet.target_tg_id {
+                    if achievements::grant(pool, uid, "bet_self_correct").await? {
+                        bot.send_message(chat_id, "🏅 Новая ачивка: Самопидор-пророк (поставил на себя и угадал).").await?;
+                    }
+                }
+                let streak = crate::db::bet::count_correct_streak(pool, chat_id_raw, bet.bettor_tg_id).await?;
+                if streak >= 3 {
+                    if achievements::grant(pool, uid, "bet_streak_3").await? {
+                        bot.send_message(chat_id, "🏅 Новая ачивка: Нострадамус (3 верных предсказания подряд).").await?;
+                    }
+                }
+            }
         }
     }
 

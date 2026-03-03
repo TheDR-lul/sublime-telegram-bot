@@ -120,6 +120,27 @@ mod tests {
         let board = "   222   ";
         assert_eq!(check_win(board), Some('2'));
     }
+
+    #[test]
+    fn elo_expected_equal_players() {
+        let e = elo_expected(1000, 1000);
+        assert!((e - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn elo_expected_stronger_player() {
+        let e = elo_expected(1400, 1000);
+        assert!(e > 0.85);
+    }
+
+    #[test]
+    fn elo_rank_tiers() {
+        assert_eq!(elo_rank(500), "🥉 Бронзовый пидор");
+        assert_eq!(elo_rank(1000), "🥈 Серебряная 🍑");
+        assert_eq!(elo_rank(1300), "🥇 Золотой 🍆");
+        assert_eq!(elo_rank(1700), "💎 Алмазный кабачок");
+        assert_eq!(elo_rank(2100), "👑 Гроссмейстер пидорства");
+    }
 }
 
 /// Create pending duel. invite_message_id can be set after sending the message.
@@ -427,6 +448,82 @@ pub async fn count_played(pool: &PgPool, tg_id: i64) -> Result<i64, AppError> {
     .fetch_one(pool)
     .await?;
     Ok(row.0)
+}
+
+// ── Elo rating ──────────────────────────────────────────
+
+use crate::db::models::DuelElo;
+
+const ELO_K: f64 = 32.0;
+
+pub async fn get_or_create_elo(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<DuelElo, AppError> {
+    let row = sqlx::query_as::<_, DuelElo>(
+        "INSERT INTO duel_elo (chat_id, tg_id) VALUES ($1, $2)
+         ON CONFLICT (chat_id, tg_id) DO UPDATE SET chat_id = EXCLUDED.chat_id
+         RETURNING id, chat_id, tg_id, elo, wins, losses",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+fn elo_expected(a: i32, b: i32) -> f64 {
+    1.0 / (1.0 + 10f64.powf((b - a) as f64 / 400.0))
+}
+
+pub async fn update_elo_after_duel(
+    pool: &PgPool,
+    chat_id: i64,
+    winner_tg_id: i64,
+    loser_tg_id: i64,
+) -> Result<(DuelElo, DuelElo), AppError> {
+    let w = get_or_create_elo(pool, chat_id, winner_tg_id).await?;
+    let l = get_or_create_elo(pool, chat_id, loser_tg_id).await?;
+
+    let exp_w = elo_expected(w.elo, l.elo);
+    let exp_l = 1.0 - exp_w;
+    let new_w_elo = (w.elo as f64 + ELO_K * (1.0 - exp_w)).round() as i32;
+    let new_l_elo = (l.elo as f64 + ELO_K * (0.0 - exp_l)).round().max(0.0) as i32;
+
+    sqlx::query("UPDATE duel_elo SET elo = $1, wins = wins + 1 WHERE id = $2")
+        .bind(new_w_elo)
+        .bind(w.id)
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE duel_elo SET elo = $1, losses = losses + 1 WHERE id = $2")
+        .bind(new_l_elo)
+        .bind(l.id)
+        .execute(pool)
+        .await?;
+
+    let w_updated = DuelElo { elo: new_w_elo, wins: w.wins + 1, ..w };
+    let l_updated = DuelElo { elo: new_l_elo, losses: l.losses + 1, ..l };
+    Ok((w_updated, l_updated))
+}
+
+pub async fn get_duel_leaderboard(pool: &PgPool, chat_id: i64, limit: i64) -> Result<Vec<DuelElo>, AppError> {
+    let rows = sqlx::query_as::<_, DuelElo>(
+        "SELECT id, chat_id, tg_id, elo, wins, losses FROM duel_elo
+         WHERE chat_id = $1 AND (wins > 0 OR losses > 0)
+         ORDER BY elo DESC LIMIT $2",
+    )
+    .bind(chat_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub fn elo_rank(elo: i32) -> &'static str {
+    match elo {
+        ..800 => "🥉 Бронзовый пидор",
+        800..1200 => "🥈 Серебряная 🍑",
+        1200..1600 => "🥇 Золотой 🍆",
+        1600..2000 => "💎 Алмазный кабачок",
+        _ => "👑 Гроссмейстер пидорства",
+    }
 }
 
 /// Resolve tguser.id from tg_id for achievements.

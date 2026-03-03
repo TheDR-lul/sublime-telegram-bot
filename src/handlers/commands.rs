@@ -47,6 +47,10 @@ pub enum Cmd {
     Pidorset,
     #[command(description = "challenge to pidor duel (tic-tac-toe); reply to user for tagged challenge")]
     Pidorduel,
+    #[command(description = "duel Elo leaderboard")]
+    Duelstats,
+    #[command(description = "bet on who will be pidor of the day")]
+    Pidorbet(String),
     // RPG: development for future — disabled for now; /rpg shows stub message.
     #[command(description = "Pidor-Royale RPG (in development)")]
     Rpg,

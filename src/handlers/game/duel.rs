@@ -372,7 +372,8 @@ pub async fn duel_move_callback(
                 .await?;
         }
 
-        grant_duel_achievements(&bot, &pool, ChatId(chat_id), winner_tg_id, loser_tg_id).await?;
+        let elo_result = duel_db::update_elo_after_duel(&pool, chat_id, winner_tg_id, loser_tg_id).await;
+        grant_duel_achievements(&bot, &pool, ChatId(chat_id), winner_tg_id, loser_tg_id, &elo_result).await?;
         return Ok(());
     }
 
@@ -402,6 +403,7 @@ async fn grant_duel_achievements(
     chat_id: ChatId,
     winner_tg_id: i64,
     loser_tg_id: i64,
+    elo_result: &Result<(crate::db::models::DuelElo, crate::db::models::DuelElo), AppError>,
 ) -> Result<(), AppError> {
     async fn do_grant(
         bot: &Bot,
@@ -457,6 +459,81 @@ async fn grant_duel_achievements(
             let _ = do_grant(bot, pool, chat_id, winner_uid, "duel_played_1", "Зашёл в дуэль").await;
         }
     }
+
+    if let Ok((w_elo, _)) = elo_result {
+        if let Some(winner_uid) = winner_uid_opt {
+            if w_elo.elo >= 1200 {
+                let _ = do_grant(bot, pool, chat_id, winner_uid, "elo_gold", "🥇 Золотой 🍆 (Elo 1200+)").await;
+            }
+            if w_elo.elo >= 1600 {
+                let _ = do_grant(bot, pool, chat_id, winner_uid, "elo_diamond", "💎 Алмазный кабачок (Elo 1600+)").await;
+            }
+            if w_elo.elo >= 2000 {
+                let _ = do_grant(bot, pool, chat_id, winner_uid, "elo_grandmaster", "👑 Гроссмейстер пидорства (Elo 2000+)").await;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn duelstats_handler(
+    bot: Bot,
+    msg: Message,
+    _: crate::handlers::commands::Cmd,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    let chat_id = msg.chat.id.0;
+    let leaderboard = duel_db::get_duel_leaderboard(&pool, chat_id, 10).await?;
+    if leaderboard.is_empty() {
+        bot.send_message(msg.chat.id, "Дуэлей ещё не было. Начни с /pidorduel!")
+            .await?;
+        return Ok(());
+    }
+
+    let mut text = String::from("<b>🏆 Рейтинг дуэлей:</b>\n\n");
+    for (i, entry) in leaderboard.iter().enumerate() {
+        let name = get_display_name(&bot, &pool, msg.chat.id, entry.tg_id).await;
+        let rank = duel_db::elo_rank(entry.elo);
+        let medal = match i {
+            0 => "🥇",
+            1 => "🥈",
+            2 => "🥉",
+            _ => "•",
+        };
+        text.push_str(&format!(
+            "{} <b>{}</b> — {} Elo ({}/{}W/L)\n    {}\n",
+            medal,
+            escape_html(&name),
+            entry.elo,
+            entry.wins,
+            entry.losses,
+            rank,
+        ));
+    }
+
+    if let Some(from) = msg.from.as_ref() {
+        let my_tg_id = from.id.0 as i64;
+        let in_top = leaderboard.iter().any(|e| e.tg_id == my_tg_id);
+        if !in_top {
+            if let Ok(my_elo) = duel_db::get_or_create_elo(&pool, chat_id, my_tg_id).await {
+                if my_elo.wins > 0 || my_elo.losses > 0 {
+                    let name = get_display_name(&bot, &pool, msg.chat.id, my_tg_id).await;
+                    text.push_str(&format!(
+                        "\n<b>Ты:</b> {} — {} Elo ({}/{}W/L)\n    {}\n",
+                        escape_html(&name),
+                        my_elo.elo,
+                        my_elo.wins,
+                        my_elo.losses,
+                        duel_db::elo_rank(my_elo.elo),
+                    ));
+                }
+            }
+        }
+    }
+
+    bot.send_message(msg.chat.id, text)
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .await?;
     Ok(())
 }
 

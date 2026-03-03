@@ -116,6 +116,8 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Ttvideo(_) => tiktok::tt_video_handler(bot, msg, cmd).await,
                         Cmd::Ttlink(_) => tiktok::tt_link_handler(bot, msg, cmd).await,
                         Cmd::Pidorduel => game_duel::pidorduel_handler(bot, msg, cmd, pool).await,
+                        Cmd::Duelstats => game_duel::duelstats_handler(bot, msg, cmd, pool).await,
+                        Cmd::Pidorbet(_) => game::pidorbet_handler(bot, msg, cmd, pool).await,
                     }
                 }
                 UpdateKind::CallbackQuery(query) => callback_router(bot, query, pool, config).await,
@@ -168,6 +170,12 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }))
         .branch(case![Cmd::Pidorduel].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game_duel::pidorduel_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Duelstats].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            game_duel::duelstats_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Pidorbet(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            game::pidorbet_handler(bot, msg, cmd, pool).await
         }))
         .branch(case![Cmd::Pidoreg].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidoreg_handler(bot, msg, cmd, pool).await

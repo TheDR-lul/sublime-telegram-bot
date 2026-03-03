@@ -5,6 +5,7 @@ pub mod achievements;
 pub mod tiktok;
 pub mod user;
 pub mod rpg;
+pub mod bet;
 pub mod duel;
 
 pub use game::*;
