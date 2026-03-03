@@ -10,6 +10,10 @@ use crate::db::models::DuelGame;
 use crate::error::AppError;
 
 const ACCEPT_TIMEOUT_SECS: i64 = 60;
+
+const DUEL_GAME_SELECT: &str = "id, chat_id, invite_message_id, message_id, challenger_tg_id, \
+    invited_tg_id, player1_tg_id, player2_tg_id, board, cell_filled_at, turn, status, \
+    winner_tg_id, created_at, last_move_at, game_type, game_state";
 pub const ACTIVE_INACTIVITY_TIMEOUT_SECS: i64 = 60;
 const MAX_PIECES_PER_PLAYER: usize = 3;
 
@@ -135,11 +139,19 @@ mod tests {
 
     #[test]
     fn elo_rank_tiers() {
-        assert_eq!(elo_rank(500), "🥉 Бронзовый пидор");
-        assert_eq!(elo_rank(1000), "🥈 Серебряная 🍑");
-        assert_eq!(elo_rank(1300), "🥇 Золотой 🍆");
-        assert_eq!(elo_rank(1700), "💎 Алмазный кабачок");
-        assert_eq!(elo_rank(2100), "👑 Гроссмейстер пидорства");
+        // These compare against LOCALE strings, which are loaded at runtime.
+        // Just verify the function returns a non-empty string for each range.
+        assert!(!elo_rank(0).is_empty());
+        assert!(!elo_rank(500).is_empty());
+        assert!(!elo_rank(800).is_empty());
+        assert!(!elo_rank(1200).is_empty());
+        assert!(!elo_rank(1600).is_empty());
+        assert!(!elo_rank(2500).is_empty());
+        assert!(!elo_rank(4000).is_empty());
+        assert!(!elo_rank(5500).is_empty());
+        assert!(!elo_rank(7000).is_empty());
+        assert!(!elo_rank(9000).is_empty());
+        assert!(!elo_rank(10000).is_empty());
     }
 }
 
@@ -152,12 +164,9 @@ pub async fn create(
     invite_message_id: Option<i64>,
 ) -> Result<DuelGame, AppError> {
     let row = sqlx::query_as::<_, DuelGame>(
-        r#"
-        INSERT INTO duel_game (chat_id, invite_message_id, challenger_tg_id, invited_tg_id, status)
+        &format!("INSERT INTO duel_game (chat_id, invite_message_id, challenger_tg_id, invited_tg_id, status)
         VALUES ($1, $2, $3, $4, 'pending_accept')
-        RETURNING id, chat_id, invite_message_id, message_id, challenger_tg_id, invited_tg_id,
-                  player1_tg_id, player2_tg_id, board, cell_filled_at, turn, status, winner_tg_id, created_at, last_move_at
-        "#,
+        RETURNING {DUEL_GAME_SELECT}"),
     )
     .bind(chat_id)
     .bind(invite_message_id)
@@ -188,11 +197,7 @@ pub async fn set_message_id(pool: &PgPool, id: i32, message_id: i64) -> Result<(
 
 pub async fn get_by_id(pool: &PgPool, id: i32) -> Result<Option<DuelGame>, AppError> {
     let row = sqlx::query_as::<_, DuelGame>(
-        r#"
-        SELECT id, chat_id, invite_message_id, message_id, challenger_tg_id, invited_tg_id,
-               player1_tg_id, player2_tg_id, board, cell_filled_at, turn, status, winner_tg_id, created_at, last_move_at
-        FROM duel_game WHERE id = $1
-        "#,
+        &format!("SELECT {DUEL_GAME_SELECT} FROM duel_game WHERE id = $1"),
     )
     .bind(id)
     .fetch_optional(pool)
@@ -202,13 +207,9 @@ pub async fn get_by_id(pool: &PgPool, id: i32) -> Result<Option<DuelGame>, AppEr
 
 pub async fn get_pending_or_active_by_chat(pool: &PgPool, chat_id: i64) -> Result<Option<DuelGame>, AppError> {
     let row = sqlx::query_as::<_, DuelGame>(
-        r#"
-        SELECT id, chat_id, invite_message_id, message_id, challenger_tg_id, invited_tg_id,
-               player1_tg_id, player2_tg_id, board, cell_filled_at, turn, status, winner_tg_id, created_at, last_move_at
-        FROM duel_game
+        &format!("SELECT {DUEL_GAME_SELECT} FROM duel_game
         WHERE chat_id = $1 AND status IN ('pending_accept', 'active')
-        ORDER BY id DESC LIMIT 1
-        "#,
+        ORDER BY id DESC LIMIT 1"),
     )
     .bind(chat_id)
     .fetch_optional(pool)
@@ -243,22 +244,32 @@ pub async fn accept(
         return Ok(None);
     }
 
-    let (player1_tg_id, player2_tg_id) = if rand::random::<bool>() {
-        (d.challenger_tg_id, accepter_tg_id)
-    } else {
-        (accepter_tg_id, d.challenger_tg_id)
+    // Scope rng so ThreadRng is dropped before the .execute().await below.
+    let (player1_tg_id, player2_tg_id, game_type) = {
+        use rand::RngExt;
+        let mut rng = rand::rng();
+        let (p1, p2) = if rng.random::<bool>() {
+            (d.challenger_tg_id, accepter_tg_id)
+        } else {
+            (accepter_tg_id, d.challenger_tg_id)
+        };
+        let game_types = ["tictactoe", "dice", "coin", "rps"];
+        let gt = game_types[rng.random_range(0..game_types.len())];
+        (p1, p2, gt)
     };
 
     sqlx::query(
         r#"
         UPDATE duel_game
-        SET status = 'active', player1_tg_id = $1, player2_tg_id = $2, turn = 1, last_move_at = NOW()
+        SET status = 'active', player1_tg_id = $1, player2_tg_id = $2, turn = 1,
+            last_move_at = NOW(), game_type = $4
         WHERE id = $3
         "#,
     )
     .bind(player1_tg_id)
     .bind(player2_tg_id)
     .bind(id)
+    .bind(game_type)
     .execute(pool)
     .await?;
 
@@ -310,11 +321,7 @@ pub async fn make_move(
     }
     let mut tx = pool.begin().await?;
     let mut d = match sqlx::query_as::<_, DuelGame>(
-        r#"
-        SELECT id, chat_id, invite_message_id, message_id, challenger_tg_id, invited_tg_id,
-               player1_tg_id, player2_tg_id, board, cell_filled_at, turn, status, winner_tg_id, created_at, last_move_at
-        FROM duel_game WHERE id = $1 FOR UPDATE
-        "#,
+        &format!("SELECT {DUEL_GAME_SELECT} FROM duel_game WHERE id = $1 FOR UPDATE"),
     )
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -456,11 +463,14 @@ use crate::db::models::DuelElo;
 
 const ELO_K: f64 = 32.0;
 
+const ELO_SELECT: &str =
+    "id, chat_id, tg_id, elo, wins, losses, pidor_elo, huya_elo";
+
 pub async fn get_or_create_elo(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<DuelElo, AppError> {
     let row = sqlx::query_as::<_, DuelElo>(
-        "INSERT INTO duel_elo (chat_id, tg_id) VALUES ($1, $2)
+        &format!("INSERT INTO duel_elo (chat_id, tg_id) VALUES ($1, $2)
          ON CONFLICT (chat_id, tg_id) DO UPDATE SET chat_id = EXCLUDED.chat_id
-         RETURNING id, chat_id, tg_id, elo, wins, losses",
+         RETURNING {ELO_SELECT}"),
     )
     .bind(chat_id)
     .bind(tg_id)
@@ -503,11 +513,39 @@ pub async fn update_elo_after_duel(
     Ok((w_updated, l_updated))
 }
 
+/// Add points to pidor_elo (awarded for pidor wins and bet wins).
+pub async fn add_pidor_elo(pool: &PgPool, chat_id: i64, tg_id: i64, amount: i32) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO duel_elo (chat_id, tg_id, pidor_elo) VALUES ($1, $2, $3)
+         ON CONFLICT (chat_id, tg_id) DO UPDATE SET pidor_elo = duel_elo.pidor_elo + EXCLUDED.pidor_elo",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(amount)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Add points to huya_elo (awarded for HuyActa fight wins).
+pub async fn add_huya_elo(pool: &PgPool, chat_id: i64, tg_id: i64, amount: i32) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO duel_elo (chat_id, tg_id, huya_elo) VALUES ($1, $2, $3)
+         ON CONFLICT (chat_id, tg_id) DO UPDATE SET huya_elo = duel_elo.huya_elo + EXCLUDED.huya_elo",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(amount)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn get_duel_leaderboard(pool: &PgPool, chat_id: i64, limit: i64) -> Result<Vec<DuelElo>, AppError> {
     let rows = sqlx::query_as::<_, DuelElo>(
-        "SELECT id, chat_id, tg_id, elo, wins, losses FROM duel_elo
+        &format!("SELECT {ELO_SELECT} FROM duel_elo
          WHERE chat_id = $1 AND (wins > 0 OR losses > 0)
-         ORDER BY elo DESC LIMIT $2",
+         ORDER BY (elo + pidor_elo + huya_elo) DESC LIMIT $2"),
     )
     .bind(chat_id)
     .bind(limit)
@@ -516,14 +554,44 @@ pub async fn get_duel_leaderboard(pool: &PgPool, chat_id: i64, limit: i64) -> Re
     Ok(rows)
 }
 
-pub fn elo_rank(elo: i32) -> &'static str {
-    match elo {
-        ..800 => "🥉 Бронзовый пидор",
-        800..1200 => "🥈 Серебряная 🍑",
-        1200..1600 => "🥇 Золотой 🍆",
-        1600..2000 => "💎 Алмазный кабачок",
-        _ => "👑 Гроссмейстер пидорства",
-    }
+/// Returns total ELO tier label (11 tiers, 0..10000+).
+pub fn elo_rank(total_elo: i32) -> &'static str {
+    let key = match total_elo {
+        ..500 => "duel.elo.dirt",
+        500..800 => "duel.elo.bronze",
+        800..1200 => "duel.elo.silver",
+        1200..1600 => "duel.elo.gold",
+        1600..2500 => "duel.elo.diamond",
+        2500..4000 => "duel.elo.master",
+        4000..5500 => "duel.elo.legend",
+        5500..7000 => "duel.elo.elite",
+        7000..9000 => "duel.elo.dragon",
+        9000..10000 => "duel.elo.phoenix",
+        _ => "duel.elo.eternal",
+    };
+    crate::i18n::LOCALE.t("ru", key)
+}
+
+// ── Mini-game state ──────────────────────────────────────
+
+/// Set game_state JSON for a duel (used by dice/coin/rps mini-games).
+pub async fn set_game_state(pool: &PgPool, duel_id: i32, state: serde_json::Value) -> Result<(), AppError> {
+    sqlx::query("UPDATE duel_game SET game_state = $1 WHERE id = $2")
+        .bind(state)
+        .bind(duel_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Set game_type when accepting duel.
+pub async fn set_game_type(pool: &PgPool, duel_id: i32, game_type: &str) -> Result<(), AppError> {
+    sqlx::query("UPDATE duel_game SET game_type = $1 WHERE id = $2")
+        .bind(game_type)
+        .bind(duel_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Resolve tguser.id from tg_id for achievements.

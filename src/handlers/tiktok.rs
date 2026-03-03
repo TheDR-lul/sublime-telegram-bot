@@ -11,8 +11,8 @@ use tokio::time::timeout;
 use crate::config::Config;
 use crate::db::tiktok;
 use crate::error::AppError;
+use crate::i18n::LOCALE;
 
-const PROCESSING_STARTED: &str = "Processing started.....";
 const YT_DLP_TIMEOUT_SECS: u64 = 120;
 
 static TIKTOK_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -93,16 +93,13 @@ pub async fn tt_video_handler(
     let source_url = match source_url {
         Some(u) if is_valid_tiktok_url(&u) => u,
         _ => {
-            bot.send_message(
-                msg.chat.id,
-                "Provide a valid TikTok link after the command or reply to the link",
-            )
-            .await?;
+            bot.send_message(msg.chat.id, LOCALE.t("ru", "tiktok.invalid_link"))
+                .await?;
             return Ok(());
         }
     };
 
-    let processing_msg = bot.send_message(msg.chat.id, PROCESSING_STARTED).await?;
+    let processing_msg = bot.send_message(msg.chat.id, LOCALE.t("ru", "tiktok.processing")).await?;
     
     match get_tt_video_info(&source_url, true).await {
         Ok((video_link, Some(video_bytes))) => {
@@ -119,13 +116,13 @@ pub async fn tt_video_handler(
         }
         Ok((_, None)) => {
             bot.delete_message(msg.chat.id, processing_msg.id).await.ok();
-            bot.send_message(msg.chat.id, "Failed to download video")
+            bot.send_message(msg.chat.id, LOCALE.t("ru", "tiktok.download_failed"))
                 .await?;
         }
         Err(e) => {
             tracing::warn!("TikTok download failed: {:?}", e);
             bot.delete_message(msg.chat.id, processing_msg.id).await.ok();
-            bot.send_message(msg.chat.id, "Failed to process the link, please, try another one")
+            bot.send_message(msg.chat.id, LOCALE.t("ru", "tiktok.link_failed"))
                 .await?;
         }
     }
@@ -145,16 +142,13 @@ pub async fn tt_link_handler(
     let source_url = match source_url {
         Some(u) if is_valid_tiktok_url(&u) => u,
         _ => {
-            bot.send_message(
-                msg.chat.id,
-                "Provide a valid TikTok link after the command or reply to the link",
-            )
-            .await?;
+            bot.send_message(msg.chat.id, LOCALE.t("ru", "tiktok.invalid_link"))
+                .await?;
             return Ok(());
         }
     };
 
-    let processing_msg = bot.send_message(msg.chat.id, PROCESSING_STARTED).await?;
+    let processing_msg = bot.send_message(msg.chat.id, LOCALE.t("ru", "tiktok.processing")).await?;
     
     match get_tt_video_info(&source_url, false).await {
         Ok((video_link, _)) => {
@@ -164,7 +158,7 @@ pub async fn tt_link_handler(
         Err(e) => {
             tracing::warn!("TikTok link extraction failed: {:?}", e);
             bot.delete_message(msg.chat.id, processing_msg.id).await.ok();
-            bot.send_message(msg.chat.id, "Failed to process the link, please, try another one")
+            bot.send_message(msg.chat.id, LOCALE.t("ru", "tiktok.link_failed"))
                 .await?;
         }
     }

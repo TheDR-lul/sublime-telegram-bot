@@ -96,8 +96,10 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         });
     }
 
+    let locale = std::sync::Arc::new(sublime::i18n::Locale::new());
+
     let mut disp = teloxide::dispatching::Dispatcher::builder(bot.clone(), full_schema)
-        .dependencies(teloxide::dptree::deps![pool, cfg, pidorscan_dedup, rate_limiter])
+        .dependencies(teloxide::dptree::deps![pool, cfg, pidorscan_dedup, rate_limiter, locale])
         .error_handler(teloxide::error_handlers::LoggingErrorHandler::with_custom_text(
             "Handler error (command or callback failed)",
         ))
@@ -225,12 +227,19 @@ async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(),
         BotCommand::new("duelstats", "duel Elo leaderboard"),
         BotCommand::new("pidorbet", "bet on who will be pidor of the day"),
         BotCommand::new("pidorset", "autorun settings (admins only)"),
+        BotCommand::new("lang", "set chat language (admins only), e.g. /lang ru"),
         BotCommand::new("meme", "get some random meme"),
         BotCommand::new("memeru", "get some random russian meme"),
         BotCommand::new("ttvideo", "get video from tiktok"),
         BotCommand::new("ttlink", "get depersonalized tiktok link"),
         BotCommand::new("achievements", "show your achievements"),
         BotCommand::new("pidorscan", "scan someone with pidor-detector"),
+        BotCommand::new("huya", "dick tamagotchi: status"),
+        BotCommand::new("huyareg", "register to the dick game"),
+        BotCommand::new("huyagrow", "grow your dick"),
+        BotCommand::new("huyafight", "fight another player (@user or reply)"),
+        BotCommand::new("huyasteal", "steal from another player (@user or reply)"),
+        BotCommand::new("huyatop", "dick leaderboard"),
     ];
     let bot = teloxide::Bot::new(&cfg.telegram_token);
     // Set same commands for default (fallback), all private chats, and all group/supergroup chats.

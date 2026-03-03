@@ -51,6 +51,20 @@ pub enum Cmd {
     Duelstats,
     #[command(description = "bet on who will be pidor of the day")]
     Pidorbet(String),
+    #[command(description = "set chat language (admins only), e.g. /lang ru")]
+    Lang(String),
+    #[command(description = "tamagotchi dick game status")]
+    Huya(String),
+    #[command(description = "register to the dick game")]
+    Huyareg,
+    #[command(description = "grow your dick")]
+    Huyagrow,
+    #[command(description = "fight another player's dick")]
+    Huyafight(String),
+    #[command(description = "steal from another player's dick")]
+    Huyasteal(String),
+    #[command(description = "dick leaderboard")]
+    Huyatop,
     // RPG: development for future — disabled for now; /rpg shows stub message.
     #[command(description = "Pidor-Royale RPG (in development)")]
     Rpg,

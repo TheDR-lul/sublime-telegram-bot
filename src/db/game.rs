@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use crate::db::models::{Game, GameResult, TgUser, UserWithCount};
 use crate::error::AppError;
 
-const GAME_SELECT: &str = "id, chat_id, autorun_enabled, autorun_morning, autorun_day, autorun_evening";
+const GAME_SELECT: &str = "id, chat_id, autorun_enabled, autorun_morning, autorun_day, autorun_evening, lang";
 
 pub async fn get_or_create_game(pool: &PgPool, chat_id: i64) -> Result<Game, AppError> {
     let game = sqlx::query_as::<_, Game>(&format!(
@@ -387,4 +387,14 @@ pub async fn stats_year(
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|r| (r.to_tg_user(), r.count)).collect())
+}
+
+/// Update the language preference for a chat's game row.
+pub async fn set_chat_lang(pool: &PgPool, chat_id: i64, lang: &str) -> Result<(), AppError> {
+    sqlx::query("UPDATE game SET lang = $1 WHERE chat_id = $2")
+        .bind(lang)
+        .bind(chat_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

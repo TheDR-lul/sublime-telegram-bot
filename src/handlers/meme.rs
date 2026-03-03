@@ -78,7 +78,7 @@ pub async fn meme_handler(
         }
         Err(e) => {
             tracing::warn!("Failed to get meme: {:?}", e);
-            bot.send_message(msg.chat.id, "Srry, smth went wrong(").await?;
+            bot.send_message(msg.chat.id, crate::i18n::LOCALE.t("ru", "meme.error_generic")).await?;
         }
     }
     Ok(())
@@ -100,7 +100,7 @@ pub async fn memeru_handler(
         Ok(_) => {}
         Err(e) => {
             tracing::warn!("Failed to send RU meme {}: {:?}", meme_link, e);
-            bot.send_message(msg.chat.id, "Srry, smth went wrong(").await?;
+            bot.send_message(msg.chat.id, crate::i18n::LOCALE.t("ru", "meme.error_generic")).await?;
         }
     }
     Ok(())
@@ -133,7 +133,7 @@ pub async fn meme_refresh_callback(
                     Err(e) => {
                         tracing::warn!("Failed to edit meme media: {:?}", e);
                         bot.answer_callback_query(query.id.clone())
-                            .text("Error! Try again")
+                            .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
                             .await?;
                     }
                 }
@@ -142,7 +142,7 @@ pub async fn meme_refresh_callback(
         Err(e) => {
             tracing::warn!("Failed to get meme for refresh: {:?}", e);
             bot.answer_callback_query(query.id.clone())
-                .text("Error! Try again")
+                .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
                 .await?;
         }
     }
@@ -184,7 +184,7 @@ pub async fn meme_save_callback(
                             Err(e) => {
                                 tracing::warn!("Failed to get meme for save: {:?}", e);
                                 bot.answer_callback_query(query.id.clone())
-                                    .text("Error! Try again")
+                                    .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
                                     .await?;
                             }
                         }
@@ -221,7 +221,7 @@ pub async fn memeru_refresh_callback(
             Err(e) => {
                 tracing::warn!("Failed to edit memeru media: {:?}", e);
                 bot.answer_callback_query(query.id.clone())
-                    .text("Error! Try again")
+                    .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
                     .await?;
             }
         }
@@ -274,7 +274,7 @@ pub async fn memeru_save_callback(
                                     Err(e) => {
                                         tracing::warn!("Failed to send memeru: {:?}", e);
                                         bot.answer_callback_query(query.id.clone())
-                                            .text("Error! Try again")
+                                            .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
                                             .await?;
                                     }
                                 }
@@ -282,7 +282,7 @@ pub async fn memeru_save_callback(
                             Err(e) => {
                                 tracing::warn!("Failed to edit markup: {:?}", e);
                                 bot.answer_callback_query(query.id.clone())
-                                    .text("Error! Try again")
+                                    .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
                                     .await?;
                             }
                         }

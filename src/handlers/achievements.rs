@@ -1,12 +1,23 @@
 use sqlx::PgPool;
 use teloxide::prelude::*;
 use teloxide::types::{
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
+    CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId,
+    ParseMode,
 };
 use teloxide::utils::html::escape as escape_html;
 
 use crate::db;
 use crate::error::AppError;
+use crate::i18n::LOCALE;
+
+const ACH_DELETE_AFTER_SECS: u64 = 60;
+
+fn schedule_ach_delete(bot: Bot, chat_id: ChatId, message_id: MessageId) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(ACH_DELETE_AFTER_SECS)).await;
+        let _ = bot.delete_message(chat_id, message_id).await;
+    });
+}
 
 const PAGE_SIZE: usize = 9;
 
@@ -17,117 +28,13 @@ struct AchMeta {
 }
 
 fn code_to_meta(code: &str) -> AchMeta {
-    match code {
-        "first_pidoreg" => AchMeta {
-            emoji: "🏅",
-            title: "Я в деле",
-            description: "Первая регистрация в игре «Пидор Дня». Добро пожаловать в клуб.",
-        },
-        "first_pidor_win" => AchMeta {
-            emoji: "🥇",
-            title: "Один раз не...",
-            description: "Первая победа в «Пидор Дня». Дальше будет только хуже.",
-        },
-        "three_pidor_wins" => AchMeta {
-            emoji: "🏆",
-            title: "Почётный пидор чата",
-            description: "3 победы в «Пидор Дня». Это уже не случайность.",
-        },
-        "pidor_series_2" => AchMeta {
-            emoji: "🔥",
-            title: "Серийный пидор",
-            description: "2 победы в «Пидор Дня» подряд. Кто-то явно на разогреве.",
-        },
-        "night_pidor" => AchMeta {
-            emoji: "🌙",
-            title: "На крыльях ночи",
-            description: "Победа в «Пидор Дня» ночью (00:00–06:00). Пока все спали.",
-        },
-        "duel_played_1" => AchMeta {
-            emoji: "⚔️",
-            title: "Зашёл в дуэль",
-            description: "Первое участие в пидор-дуэли. Ты смелый или тупой.",
-        },
-        "duel_first_win" => AchMeta {
-            emoji: "🗡️",
-            title: "Первая победа в дуэли",
-            description: "Загнал 🍆 в чужую 🍑 впервые. Запомни это чувство.",
-        },
-        "duel_won_5" => AchMeta {
-            emoji: "🍆",
-            title: "Пять раз загнал 🍆",
-            description: "5 побед в дуэлях. Твой 🍆 уже легенда.",
-        },
-        "duel_won_10" => AchMeta {
-            emoji: "💪",
-            title: "Десятка в дуэлях",
-            description: "10 побед в дуэлях. Мастер тактического 🍆.",
-        },
-        "duel_first_loss" => AchMeta {
-            emoji: "💔",
-            title: "Первое поражение",
-            description: "Первое поражение в дуэли. Бывает, 🍑 не выбирают.",
-        },
-        "duel_lost_3" => AchMeta {
-            emoji: "🍑",
-            title: "Трижды 🍑",
-            description: "3 поражения в дуэлях. Уже трижды в роли 🍑.",
-        },
-        "duel_lost_5" => AchMeta {
-            emoji: "🕳️",
-            title: "Опытный 🍑",
-            description: "5 поражений в дуэлях. Профессиональная 🍑.",
-        },
-        "duel_lost_10" => AchMeta {
-            emoji: "🪣",
-            title: "Ведро для кабачков",
-            description: "10 поражений в дуэлях. Вмещает всё.",
-        },
-        "elo_gold" => AchMeta {
-            emoji: "🥇",
-            title: "Золотой 🍆",
-            description: "Достигнут Elo 1200+ в дуэлях. Ты опасен.",
-        },
-        "elo_diamond" => AchMeta {
-            emoji: "💎",
-            title: "Алмазный 🍆",
-            description: "Достигнут Elo 1600+ в дуэлях. Тебя уже боятся.",
-        },
-        "elo_grandmaster" => AchMeta {
-            emoji: "👑",
-            title: "Гроссмейстер пидорства",
-            description: "Достигнут Elo 2000+ в дуэлях. Абсолютный чемпион.",
-        },
-        "bet_first" => AchMeta {
-            emoji: "🎲",
-            title: "Букмекер",
-            description: "Первая ставка на пидора дня. Сначала ставил деньги, потом — очко.",
-        },
-        "bet_correct_1" => AchMeta {
-            emoji: "🎯",
-            title: "Пидоралитик",
-            description: "Первое верное предсказание пидора дня. Начало карьеры.",
-        },
-        "bet_correct_3" => AchMeta {
-            emoji: "🔮",
-            title: "Хуясновидящий",
-            description: "3 верных предсказания пидора дня. Ты видишь будущее.",
-        },
-        "bet_self_correct" => AchMeta {
-            emoji: "🪞",
-            title: "Самопидор-пророк",
-            description: "Поставил на себя как пидора дня — и угадал. Самопознание.",
-        },
-        "bet_streak_3" => AchMeta {
-            emoji: "📜",
-            title: "Ностраданус",
-            description: "3 верных предсказания подряд. Мишель, ты ли это?",
-        },
-        _ => AchMeta {
-            emoji: "✨",
-            title: "Неизвестная ачивка",
-            description: "Ты нашёл что-то загадочное.",
-        },
+    let emoji_key = format!("achievements.list.{}_emoji", code);
+    let title_key = format!("achievements.list.{}_title", code);
+    let desc_key  = format!("achievements.list.{}_desc", code);
+    AchMeta {
+        emoji: LOCALE.t_opt("ru", &emoji_key).unwrap_or(LOCALE.t("ru", "achievements.list.unknown_emoji")),
+        title: LOCALE.t_opt("ru", &title_key).unwrap_or(LOCALE.t("ru", "achievements.list.unknown_title")),
+        description: LOCALE.t_opt("ru", &desc_key).unwrap_or(LOCALE.t("ru", "achievements.list.unknown_desc")),
     }
 }
 
@@ -189,19 +96,21 @@ fn build_grid_keyboard(
 }
 
 fn grid_text(achievements: &[db::models::Achievement], page: usize) -> String {
-    let start = page * PAGE_SIZE;
-    let end = (start + PAGE_SIZE).min(achievements.len());
-    let page_items = &achievements[start..end];
-    let mut text = format!(
-        "<b>Ачивки ({}):</b>\n",
-        achievements.len()
-    );
-    for a in page_items {
-        let meta = code_to_meta(&a.code);
-        text.push_str(&format!("{} {} ", meta.emoji, escape_html(meta.title)));
-    }
-    text.push_str("\n\n<i>Нажми на иконку для подробностей</i>");
-    text
+    let total = achievements.len();
+    let total_pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
+    let page_num = page + 1;
+    let header = LOCALE.t_fmt("ru", "achievements.header", &[("count", &total.to_string())]);
+    let page_info = if total_pages > 1 {
+        format!(" ({}/{})", page_num, total_pages)
+    } else {
+        String::new()
+    };
+    format!(
+        "<b>{}{}</b>\n\n<i>{}</i>",
+        header,
+        page_info,
+        LOCALE.t("ru", "achievements.tap_hint"),
+    )
 }
 
 pub async fn achievements_handler(
@@ -213,7 +122,7 @@ pub async fn achievements_handler(
     let from_user = match msg.from.as_ref() {
         Some(u) => u,
         None => {
-            bot.send_message(msg.chat.id, "Cannot show achievements for anonymous user.")
+            bot.send_message(msg.chat.id, LOCALE.t("ru", "achievements.anonymous"))
                 .await?;
             return Ok(());
         }
@@ -223,7 +132,7 @@ pub async fn achievements_handler(
     let list = db::achievements::list_for_user(&pool, tg_user.id).await?;
 
     if list.is_empty() {
-        bot.send_message(msg.chat.id, "У тебя пока нет ачивок. Всё впереди.")
+        bot.send_message(msg.chat.id, LOCALE.t("ru", "achievements.no_achievements"))
             .await?;
         return Ok(());
     }
@@ -231,10 +140,12 @@ pub async fn achievements_handler(
     let text = grid_text(&list, 0);
     let kb = build_grid_keyboard(&list, tg_user.id, 0);
 
-    bot.send_message(msg.chat.id, text)
+    let sent = bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::Html)
         .reply_markup(kb)
         .await?;
+
+    schedule_ach_delete(bot, msg.chat.id, sent.id);
     Ok(())
 }
 
@@ -273,7 +184,7 @@ pub async fn achievements_callback(
         if owner.tg_id != caller_tg_id {
             let _ = bot
                 .answer_callback_query(query.id)
-                .text("Это не твои ачивки.")
+                .text(LOCALE.t("ru", "achievements.not_yours"))
                 .show_alert(false)
                 .await;
             return Ok(());
@@ -316,16 +227,15 @@ pub async fn achievements_callback(
             let a = &list[idx];
             let meta = code_to_meta(&a.code);
             let when = a.earned_at.format("%Y-%m-%d %H:%M UTC");
-            let text = format!(
-                "{} <b>{}</b>\n\n{}\n\n<i>Получена: {}</i>",
-                meta.emoji,
-                escape_html(meta.title),
-                escape_html(meta.description),
-                when,
-            );
+            let text = LOCALE.t_fmt("ru", "achievements.detail_fmt", &[
+                ("emoji", meta.emoji),
+                ("title", &escape_html(meta.title)),
+                ("description", &escape_html(meta.description)),
+                ("date", &when.to_string()),
+            ]);
             let page = idx / PAGE_SIZE;
             let back_kb = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-                "← Назад".to_string(),
+                LOCALE.t("ru", "achievements.back_btn").to_string(),
                 format!("ach:p:{}:{}", user_id, page),
             )]]);
             if let Some(ref msg) = query.message {

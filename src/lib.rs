@@ -5,5 +5,6 @@ pub mod dedup;
 pub mod dispatcher;
 pub mod error;
 pub mod handlers;
+pub mod i18n;
 pub mod middleware;
 pub mod ratelimit;

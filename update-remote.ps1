@@ -51,7 +51,7 @@ if ($latestBackup) {
 # 2. Copy full source to server
 Write-Host "== 2/4. Copy source to server ==" -ForegroundColor Cyan
 scp $SshOpts "Cargo.toml" "Cargo.lock" "Dockerfile" "config.toml" "config.toml.example" "docker-compose.deploy.yml" "${Target}:${RemoteDir}/"
-scp $SshOpts -r "src" "migrations" "${Target}:${RemoteDir}/"
+scp $SshOpts -r "src" "migrations" "locale" "${Target}:${RemoteDir}/"
 
 # Write .env.watchdog on server before remote-update so watchdog can start
 if ($NotificationBotToken) {

@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::error::AppError;
 use crate::handlers::{
     about, achievements as achievements_handler, commands::Cmd, game::commands as game,
-    game::duel as game_duel, meme, misc, tiktok,
+    game::duel as game_duel, huya as huya_handler, meme, misc, tiktok,
 };
 
 static PIDOR_YEAR_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -54,6 +54,27 @@ async fn callback_router(
     }
     if data.starts_with("duel:") {
         return game_duel::duel_move_callback(bot, query, pool).await;
+    }
+    if data.starts_with("duel_dice:") {
+        return game_duel::duel_dice_callback(bot, query, pool).await;
+    }
+    if data.starts_with("duel_coin:") {
+        return game_duel::duel_coin_callback(bot, query, pool).await;
+    }
+    if data.starts_with("duel_rps:") {
+        return game_duel::duel_rps_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_grow:") {
+        return huya_handler::huya_grow_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_fa:") {
+        return huya_handler::huya_fight_accept_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_fd:") {
+        return huya_handler::huya_fight_decline_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_fm:") {
+        return huya_handler::huya_fight_move_callback(bot, query, pool).await;
     }
     match data {
         "meme_en_refresh" => meme::meme_refresh_callback(bot, query).await,
@@ -121,6 +142,13 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Pidorduel => game_duel::pidorduel_handler(bot, msg, cmd, pool).await,
                         Cmd::Duelstats => game_duel::duelstats_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorbet(_) => game::pidorbet_handler(bot, msg, cmd, pool).await,
+                        Cmd::Lang(_) => misc::lang_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huya(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyareg => huya_handler::huyareg_handler(bot, msg, pool).await,
+                        Cmd::Huyagrow => huya_handler::huya_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyafight(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyasteal(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyatop => huya_handler::huyatop_handler(bot, msg, cmd, pool).await,
                     }
                 }
                 UpdateKind::CallbackQuery(query) => callback_router(bot, query, pool, config).await,
@@ -179,6 +207,27 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }))
         .branch(case![Cmd::Pidorbet(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidorbet_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Lang(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            misc::lang_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huya(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huya_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyareg].endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
+            huya_handler::huyareg_handler(bot, msg, pool).await
+        }))
+        .branch(case![Cmd::Huyagrow].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huya_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyafight(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huya_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyasteal(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huya_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyatop].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huyatop_handler(bot, msg, cmd, pool).await
         }))
         .branch(case![Cmd::Pidoreg].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidoreg_handler(bot, msg, cmd, pool).await

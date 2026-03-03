@@ -1,6 +1,6 @@
 //! Row types for sqlx (no ORM).
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize)]
@@ -42,6 +42,7 @@ pub struct Game {
     pub autorun_morning: bool,
     pub autorun_day: bool,
     pub autorun_evening: bool,
+    pub lang: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -138,6 +139,8 @@ pub struct DuelGame {
     pub winner_tg_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub last_move_at: Option<DateTime<Utc>>,
+    pub game_type: String,
+    pub game_state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -148,6 +151,39 @@ pub struct DuelElo {
     pub elo: i32,
     pub wins: i32,
     pub losses: i32,
+    pub pidor_elo: i32,
+    pub huya_elo: i32,
+}
+
+impl DuelElo {
+    pub fn total_elo(&self) -> i32 {
+        self.elo + self.pidor_elo + self.huya_elo
+    }
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Huya {
+    pub id: i32,
+    pub chat_id: i64,
+    pub tg_id: i64,
+    pub length_mm: i32,
+    pub level: i32,
+    pub xp: i32,
+    pub actions_left: i32,
+    pub actions_reset_at: NaiveDate,
+    pub created_at: DateTime<Utc>,
+}
+
+impl Huya {
+    /// Display length in cm with one decimal place.
+    pub fn display_cm(&self) -> String {
+        let abs = self.length_mm.unsigned_abs();
+        format!("{}.{}", abs / 10, abs % 10)
+    }
+
+    pub fn is_ass(&self) -> bool {
+        self.length_mm < 0
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

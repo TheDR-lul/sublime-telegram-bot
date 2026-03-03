@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::error::AppError;
 use crate::handlers::about;
 use crate::handlers::game::commands as game_commands;
+use crate::i18n::LOCALE;
 
 use rand::prelude::*;
 use std::sync::LazyLock;
@@ -46,16 +47,12 @@ pub async fn slap_handler(
             })
             .unwrap_or_else(|| "кто-то".to_string())
     } else {
-        bot.send_message(msg.chat.id, "Ответь на сообщение, чтобы шлепнуть кого-то!")
+        bot.send_message(msg.chat.id, LOCALE.t("ru", "slap.no_reply"))
             .await?;
         return Ok(());
     };
     
-    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
-    let phrase = slap_phrases::PHRASES
-        .choose(&mut rng)
-        .expect("slap_phrases::PHRASES is non-empty");
-    let text = phrase.replace("{who}", &who).replace("{target}", &target);
+    let text = LOCALE.t_rand_fmt("ru", "slap.phrases", &[("who", &who), ("target", &target)]);
     
     bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::Html)
@@ -63,35 +60,12 @@ pub async fn slap_handler(
     Ok(())
 }
 
-mod slap_phrases {
-    pub const PHRASES: &[&str] = &[
-        "<b>{who}</b> смачно шлепнул хуйцом по лицу <i>{target}</i>",
-        "<b>{who}</b> мощно вмазал хуйцом в рожу <i>{target}</i>",
-        "<b>{who}</b> со всей дури ударил хуйцом по физиономии <i>{target}</i>",
-        "<b>{who}</b> от души приложил хуйцом к лицу <i>{target}</i>",
-        "<b>{who}</b> звонко шлепнул хуйцом по щеке <i>{target}</i>",
-        "<b>{who}</b> резко врезал хуйцом в морду <i>{target}</i>",
-        "<b>{who}</b> сочно ударил хуйцом по лицу <i>{target}</i>",
-        "<b>{who}</b> мощно треснул хуйцом по физиономии <i>{target}</i>",
-        "<b>{who}</b> с размаху влепил хуйцом в рожу <i>{target}</i>",
-        "<b>{who}</b> крепко шлепнул хуйцом по лицу <i>{target}</i>",
-        "<b>{who}</b> звучно ударил хуйцом по щеке <i>{target}</i>",
-        "<b>{who}</b> со всей силы вмазал хуйцом в морду <i>{target}</i>",
-        "<b>{who}</b> резко приложил хуйцом к физиономии <i>{target}</i>",
-        "<b>{who}</b> мощно врезал хуйцом по лицу <i>{target}</i>",
-        "<b>{who}</b> смачно треснул хуйцом в рожу <i>{target}</i>",
-    ];
-}
-
-/// RPG disabled stub: development for future.
-pub const RPG_DISABLED_MSG: &str = "Pidor-Royale RPG — в разработке на будущее. Следите за обновлениями.";
-
 pub async fn rpg_disabled_handler(
     bot: Bot,
     msg: Message,
     _: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
-    bot.send_message(msg.chat.id, RPG_DISABLED_MSG).await?;
+    bot.send_message(msg.chat.id, LOCALE.t("ru", "rpg.disabled")).await?;
     Ok(())
 }
 
@@ -100,7 +74,7 @@ pub async fn rpg_disabled_callback(
     query: teloxide::types::CallbackQuery,
 ) -> Result<(), AppError> {
     if let Some(chat_id) = query.message.as_ref().map(|m| m.chat().id) {
-        bot.send_message(chat_id, RPG_DISABLED_MSG).await?;
+        bot.send_message(chat_id, LOCALE.t("ru", "rpg.disabled")).await?;
     }
     bot.answer_callback_query(query.id).await?;
     Ok(())
@@ -146,7 +120,7 @@ pub async fn google_handler(
         _ => return Ok(()),
     };
     if query.is_empty() {
-        bot.send_message(msg.chat.id, "What should I search for?")
+        bot.send_message(msg.chat.id, LOCALE.t("ru", "inline.google_no_query"))
             .await?;
         return Ok(());
     }
@@ -187,75 +161,32 @@ pub async fn pidorscan_handler(
     let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     let percent: u8 = rng.random_range(0..=100);
 
-    let intro_templates = [
-        "Запускаю пидор-детектор для {}...",
-        "Так, ну-ка подойдите поближе, {}... запускаю сканер.",
-        "Подключаюсь к базам пидоров РФ, {}...",
-        "Включаю режим *глубокого* пидор-сканирования для {}...",
-        "Сканирую аурочку {} на предмет пидорства...",
-    ];
-    let intro_raw = intro_templates
-        .choose(&mut rng)
-        .copied()
-        .unwrap_or("Запускаю пидор-детектор для {}...");
-    let intro = intro_raw.replace("{}", &target_name);
+    let intro = LOCALE.t_rand_fmt("ru", "pidorscan.intro", &[("name", &target_name)]);
     bot.send_message(msg.chat.id, intro).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
-    let analysis_templates = [
-        "Анализирую историю сообщений, мемы и карму...",
-        "Считаю количество /pidor и жалоб в чате...",
-        "Смотрю, сколько раз этот персонаж уже оправдывался, что он \"не пидор\"...",
-        "Подгружаю статистику позора из облака...",
-    ];
-    let analysis = analysis_templates
-        .choose(&mut rng)
-        .copied()
-        .unwrap_or("Анализирую историю сообщений, мемы и карму...");
+    let analysis = LOCALE.t_rand("ru", "pidorscan.analysis");
     bot.send_message(msg.chat.id, analysis).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(850)).await;
-    let algo_templates = [
-        "Почти готово, подрубаю квантовый пидор-алгоритм...",
-        "Сверяю сигнатуру пидора с эталоном Роскомпидора...",
-        "Намешиваю немного машинного обучения и человеческой ненависти...",
-        "Достаю старый добрый аналоговый пидор-детектор из 2016 года...",
-    ];
-    let algo = algo_templates
-        .choose(&mut rng)
-        .copied()
-        .unwrap_or("Почти готово, подрубаю квантовый пидор-алгоритм...");
+    let algo = LOCALE.t_rand("ru", "pidorscan.algo");
     bot.send_message(msg.chat.id, algo).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
 
     let name_escaped = escape_html(&target_name);
+    let percent_str = percent.to_string();
 
     let verdict = if percent == 0 {
-        format!(
-            "<b>Вердикт:</b> {} вообще не пидор\n<i>Подозрительно, конечно</i>",
-            name_escaped
-        )
+        LOCALE.t_fmt("ru", "pidorscan.verdict_zero", &[("name", &name_escaped)])
     } else if percent < 30 {
-        format!(
-            "<b>Вердикт:</b> вероятность, что {} пидор — <b>{}%</b>\nПока живи, но мы за тобой следим",
-            name_escaped, percent
-        )
+        LOCALE.t_fmt("ru", "pidorscan.verdict_low", &[("name", &name_escaped), ("percent", &percent_str)])
     } else if percent < 70 {
-        format!(
-            "<b>Вердикт:</b> {} пидор на <b>{}%</b>\nЕщё чуть-чуть — и мама расстроится",
-            name_escaped, percent
-        )
+        LOCALE.t_fmt("ru", "pidorscan.verdict_mid", &[("name", &name_escaped), ("percent", &percent_str)])
     } else if percent < 100 {
-        format!(
-            "<b>Вердикт:</b> {} пидор примерно на <b>{}%</b>\nЭто уже почти приговор",
-            name_escaped, percent
-        )
+        LOCALE.t_fmt("ru", "pidorscan.verdict_high", &[("name", &name_escaped), ("percent", &percent_str)])
     } else {
-        format!(
-            "<b>Вердикт:</b> {} — <b>100% пидор</b>\nБез права на обжалование",
-            name_escaped
-        )
+        LOCALE.t_fmt("ru", "pidorscan.verdict_max", &[("name", &name_escaped), ("percent", &percent_str)])
     };
 
     bot.send_message(msg.chat.id, verdict)
@@ -298,8 +229,8 @@ pub async fn inline_handler(
     let results = vec![
         InlineQueryResult::Article(InlineQueryResultArticle {
             id: uuid::Uuid::new_v4().to_string(),
-            title: "Echo".to_string(),
-            description: Some("Just echo what you have typed".to_string()),
+            title: LOCALE.t("ru", "inline.echo_title").to_string(),
+            description: Some(LOCALE.t("ru", "inline.echo_desc").to_string()),
             input_message_content: InputMessageContent::Text(InputMessageContentText {
                 message_text: q.to_string(),
                 parse_mode: None,
@@ -314,8 +245,8 @@ pub async fn inline_handler(
         }),
         InlineQueryResult::Article(InlineQueryResultArticle {
             id: uuid::Uuid::new_v4().to_string(),
-            title: "Caps".to_string(),
-            description: Some("Make query text upper case".to_string()),
+            title: LOCALE.t("ru", "inline.caps_title").to_string(),
+            description: Some(LOCALE.t("ru", "inline.caps_desc").to_string()),
             input_message_content: InputMessageContent::Text(InputMessageContentText {
                 message_text: q.to_uppercase(),
                 parse_mode: None,
@@ -330,8 +261,8 @@ pub async fn inline_handler(
         }),
         InlineQueryResult::Article(InlineQueryResultArticle {
             id: uuid::Uuid::new_v4().to_string(),
-            title: "Shuffle".to_string(),
-            description: Some("Shuffle all the letters inside words".to_string()),
+            title: LOCALE.t("ru", "inline.shuffle_title").to_string(),
+            description: Some(LOCALE.t("ru", "inline.shuffle_desc").to_string()),
             input_message_content: InputMessageContent::Text(InputMessageContentText {
                 message_text: shuffled.join(""),
                 parse_mode: None,
@@ -353,9 +284,9 @@ pub async fn inline_handler(
 /// Single-column layout so buttons render evenly on narrow screens (mobile).
 fn menu_main_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback("🎮 Игра", "menu:game")],
-        vec![InlineKeyboardButton::callback("📋 Прочее", "menu:other")],
-        vec![InlineKeyboardButton::callback("⚙ Админ", "menu:admin")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.game"), "menu:game")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.other"), "menu:other")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.admin"), "menu:admin")],
     ])
 }
 
@@ -363,26 +294,27 @@ fn menu_admin_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback("🔧 Настройки автопидора", "menu:action:pidorset")],
         vec![InlineKeyboardButton::callback("📢 Позвать участников", "menu:action:pidorcall")],
+        vec![InlineKeyboardButton::callback("🌐 Язык чата (/lang ru)", "menu:action:lang_info")],
         vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
     ])
 }
 
 fn menu_game_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback("📜 Правила", "menu:action:pidorules")],
-        vec![InlineKeyboardButton::callback("⚔ Пидор-дуэль", "menu:action:pidorduel")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.rules"), "menu:action:pidorules")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.duel"), "menu:action:pidorduel")],
         vec![
-            InlineKeyboardButton::callback("📊 За год", "menu:action:pidorstats"),
-            InlineKeyboardButton::callback("📊 Всё время", "menu:action:pidorall"),
+            InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.stats"), "menu:action:pidorstats"),
+            InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.all_time"), "menu:action:pidorall"),
         ],
-        vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.back"), "menu:main")],
     ])
 }
 
 fn menu_other_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback("ℹ О боте", "menu:action:about")],
-        vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.about"), "menu:action:about")],
+        vec![InlineKeyboardButton::callback(LOCALE.t("ru", "menu.buttons.back"), "menu:main")],
     ])
 }
 
@@ -394,7 +326,7 @@ pub async fn menu_handler(
     let chat_id = msg.chat.id;
     let _ = bot.delete_message(chat_id, msg.id).await;
     let sent = bot
-        .send_message(chat_id, "Выберите раздел:")
+        .send_message(chat_id, LOCALE.t("ru", "menu.choose_section"))
         .reply_markup(menu_main_keyboard())
         .await?;
     game_commands::schedule_delete_message(bot, chat_id, sent.id);
@@ -420,7 +352,7 @@ pub async fn menu_callback(
     if data == "menu:main" {
         bot.answer_callback_query(query.id).await?;
         if let Some(mid) = message_id {
-            bot.edit_message_text(chat_id, mid, "Выберите раздел:")
+            bot.edit_message_text(chat_id, mid, LOCALE.t("ru", "menu.choose_section"))
                 .reply_markup(menu_main_keyboard())
                 .await?;
             schedule_menu_delete(chat_id, mid);
@@ -430,7 +362,7 @@ pub async fn menu_callback(
     if data == "menu:game" {
         bot.answer_callback_query(query.id).await?;
         if let Some(mid) = message_id {
-            bot.edit_message_text(chat_id, mid, "Игра Пидор Дня")
+            bot.edit_message_text(chat_id, mid, LOCALE.t("ru", "menu.game_section"))
                 .reply_markup(menu_game_keyboard())
                 .await?;
             schedule_menu_delete(chat_id, mid);
@@ -440,7 +372,7 @@ pub async fn menu_callback(
     if data == "menu:other" {
         bot.answer_callback_query(query.id).await?;
         if let Some(mid) = message_id {
-            bot.edit_message_text(chat_id, mid, "Прочее")
+            bot.edit_message_text(chat_id, mid, LOCALE.t("ru", "menu.other_section"))
                 .reply_markup(menu_other_keyboard())
                 .await?;
             schedule_menu_delete(chat_id, mid);
@@ -451,19 +383,19 @@ pub async fn menu_callback(
         let user_id = query.from.id.0 as u64;
         if chat_id.0 >= 0 {
             bot.answer_callback_query(query.id)
-                .text("Раздел только для групповых чатов.")
+                .text(LOCALE.t("ru", "menu.group_only"))
                 .await?;
             return Ok(());
         }
         if !game_commands::is_chat_admin(&bot, chat_id, user_id).await {
             bot.answer_callback_query(query.id)
-                .text("Только для администраторов чата.")
+                .text(LOCALE.t("ru", "menu.admin_only"))
                 .await?;
             return Ok(());
         }
         bot.answer_callback_query(query.id).await?;
         if let Some(mid) = message_id {
-            bot.edit_message_text(chat_id, mid, "Администрирование")
+            bot.edit_message_text(chat_id, mid, LOCALE.t("ru", "menu.admin_section"))
                 .reply_markup(menu_admin_keyboard())
                 .await?;
             schedule_menu_delete(chat_id, mid);
@@ -496,10 +428,10 @@ pub async fn menu_callback(
             "pidorset" => {
                 let user_id = query.from.id.0 as u64;
                 if chat_id.0 >= 0 {
-                    bot.send_message(chat_id, "Настройки автопидора только в групповых чатах.")
+                    bot.send_message(chat_id, LOCALE.t("ru", "pidor.settings.group_only"))
                         .await?;
                 } else if !game_commands::is_chat_admin(&bot, chat_id, user_id).await {
-                    bot.send_message(chat_id, "Только администраторы чата могут менять настройки.")
+                    bot.send_message(chat_id, LOCALE.t("ru", "pidor.settings.admin_only"))
                         .await?;
                 } else if let Some(mid) = message_id {
                     if let Err(e) = game_commands::edit_message_to_pidorset(&bot, &pool, chat_id, mid).await {
@@ -515,24 +447,73 @@ pub async fn menu_callback(
             "pidorcall" => {
                 let user_id = query.from.id.0 as u64;
                 if chat_id.0 >= 0 {
-                    bot.send_message(chat_id, "Команда только для групповых чатов.")
+                    bot.send_message(chat_id, LOCALE.t("ru", "pidor.settings.call_group_only"))
                         .await?;
                 } else if !game_commands::is_chat_admin(&bot, chat_id, user_id).await {
-                    bot.send_message(chat_id, "Только администраторы чата могут вызывать эту команду.")
+                    bot.send_message(chat_id, LOCALE.t("ru", "pidor.settings.call_admin_only"))
                         .await?;
                 } else {
                     game_commands::send_pidorcall_message(&bot, &pool, chat_id).await?;
                 }
             }
             "pidorduel" => {
-                bot.send_message(
-                    chat_id,
-                    "/pidorduel — искать любого соперника; ответь на сообщение юзера и напиши /pidorduel — вызвать конкретного. (1 мин на принятие.)",
-                )
-                .await?;
+                bot.send_message(chat_id, LOCALE.t("ru", "menu.duel_help"))
+                    .await?;
+            }
+            "lang_info" => {
+                bot.send_message(chat_id, "Смените язык командой /lang ru (доступны: ru).")
+                    .await?;
             }
             _ => {}
         }
     }
+    Ok(())
+}
+
+// ── /lang handler ──────────────────────────────────────────
+pub async fn lang_handler(
+    bot: Bot,
+    msg: Message,
+    cmd: crate::handlers::commands::Cmd,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        bot.send_message(msg.chat.id, "Язык можно менять только в групповых чатах.")
+            .await?;
+        return Ok(());
+    }
+
+    let user_id = match msg.from.as_ref() {
+        Some(u) => u.id.0,
+        None => return Ok(()),
+    };
+
+    if !game_commands::is_chat_admin(&bot, msg.chat.id, user_id).await {
+        bot.send_message(msg.chat.id, "Только администраторы могут менять язык чата.")
+            .await?;
+        return Ok(());
+    }
+
+    let arg = match &cmd {
+        crate::handlers::commands::Cmd::Lang(s) => s.trim().to_lowercase(),
+        _ => String::new(),
+    };
+
+    if arg.is_empty() {
+        bot.send_message(msg.chat.id, "Использование: /lang ru")
+            .await?;
+        return Ok(());
+    }
+
+    const SUPPORTED: &[&str] = &["ru"];
+    if !SUPPORTED.contains(&arg.as_str()) {
+        bot.send_message(msg.chat.id, format!("Неизвестный язык. Доступны: {}", SUPPORTED.join(", ")))
+            .await?;
+        return Ok(());
+    }
+
+    crate::db::game::set_chat_lang(&pool, msg.chat.id.0, &arg).await?;
+    bot.send_message(msg.chat.id, format!("Язык чата изменён на: {arg}"))
+        .await?;
     Ok(())
 }

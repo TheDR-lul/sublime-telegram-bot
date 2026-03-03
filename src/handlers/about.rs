@@ -3,8 +3,7 @@ use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::Message;
 
 use crate::error::AppError;
-
-const ABOUT_HTML: &str = "Бот для игры «Пидор Дня» и развлечений в чате. Исходный код: <a href=\"https://github.com/TheDR-lul/sublime\">GitHub</a>";
+use crate::i18n::LOCALE;
 
 pub async fn about_handler(
     bot: Bot,
@@ -15,7 +14,7 @@ pub async fn about_handler(
 }
 
 pub async fn send_about(bot: &Bot, chat_id: teloxide::types::ChatId) -> Result<(), AppError> {
-    bot.send_message(chat_id, ABOUT_HTML)
+    bot.send_message(chat_id, LOCALE.t("ru", "about.text"))
         .parse_mode(teloxide::types::ParseMode::Html)
         .disable_link_preview(true)
         .await?;

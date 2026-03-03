@@ -7,6 +7,7 @@ pub mod user;
 pub mod rpg;
 pub mod bet;
 pub mod duel;
+pub mod huya;
 
 pub use game::*;
 pub use kv::*;
