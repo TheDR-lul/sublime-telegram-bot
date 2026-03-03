@@ -4,6 +4,7 @@ use clap::Parser;
 use sublime::{cli::*, config::Config, error::AppError};
 use std::io::{self, Write};
 use teloxide::prelude::Requester;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -22,10 +23,10 @@ async fn main() -> Result<(), AppError> {
 
 async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError> {
     let cfg = Config::load(config_path)?;
-    
+
     #[cfg(feature = "sentry")]
-    if let Some(ref dsn) = cfg.sentry_dsn {
-        let _guard = sentry::init((
+    let _sentry_guard = cfg.sentry_dsn.as_ref().map(|dsn| {
+        let guard = sentry::init((
             dsn.clone(),
             sentry::ClientOptions {
                 release: sentry::release_name!(),
@@ -33,13 +34,16 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
             },
         ));
         tracing::info!("Sentry initialized");
-    }
-    
+        guard
+    });
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
     let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(std::time::Duration::from_secs(5))
         .connect(&cfg.database_url)
         .await?;
 
@@ -50,34 +54,50 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
     // Deduplication for /pidorscan to avoid duplicate messages when the same update is processed twice.
     let pidorscan_dedup = std::sync::Arc::new(sublime::dedup::PidorscanDedup::new(2));
 
+    let rate_limiter = std::sync::Arc::new(sublime::ratelimit::RateLimiter::new(2));
+
+    let shutdown_token = CancellationToken::new();
+
     // Background autorun for daily Pidor game (Kyiv timezone, 3 times per day).
     {
         let bot_clone = bot.clone();
         let pool_clone = pool.clone();
+        let scheduler_shutdown = shutdown_token.clone();
         tokio::spawn(async move {
-            sublime::handlers::game::commands::run_pidor_autorun_scheduler(bot_clone, pool_clone)
-                .await;
+            sublime::handlers::game::commands::run_pidor_autorun_scheduler(
+                bot_clone,
+                pool_clone,
+                scheduler_shutdown,
+            )
+            .await;
         });
     }
     // Cancel expired duel challenges (1 min timeout).
     {
         let bot_clone = bot.clone();
         let pool_clone = pool.clone();
+        let duel_shutdown = shutdown_token.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(45));
             loop {
-                interval.tick().await;
-                if let Err(e) =
-                    sublime::handlers::game::duel::cancel_expired_duels(&bot_clone, &pool_clone).await
-                {
-                    tracing::debug!("cancel_expired_duels: {:?}", e);
+                tokio::select! {
+                    _ = duel_shutdown.cancelled() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        if let Err(e) =
+                            sublime::handlers::game::duel::cancel_expired_duels(&bot_clone, &pool_clone).await
+                        {
+                            tracing::debug!("cancel_expired_duels: {:?}", e);
+                        }
+                    }
                 }
             }
         });
     }
 
     let mut disp = teloxide::dispatching::Dispatcher::builder(bot.clone(), full_schema)
-        .dependencies(teloxide::dptree::deps![pool, cfg, pidorscan_dedup])
+        .dependencies(teloxide::dptree::deps![pool, cfg, pidorscan_dedup, rate_limiter])
         .error_handler(teloxide::error_handlers::LoggingErrorHandler::with_custom_text(
             "Handler error (command or callback failed)",
         ))
@@ -86,6 +106,7 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
 
     tracing::info!("Bot started");
     disp.dispatch().await;
+    shutdown_token.cancel();
     Ok(())
 }
 
@@ -317,6 +338,8 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
 
     let pool = if let Some(ref url) = database_url {
         match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(std::time::Duration::from_secs(5))
             .connect(url)
             .await
         {
@@ -331,7 +354,9 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
     };
 
     async fn status_handler(bot: teloxide::Bot, msg: Message, container: String) -> Result<(), AppError> {
-        let running = check_container_running(&container);
+        let running = tokio::task::spawn_blocking(move || check_container_running(&container))
+            .await
+            .unwrap_or(false);
         let status = if running { "Бот работает." } else { "Бот не запущен." };
         bot.send_message(msg.chat.id, status).await?;
         Ok(())

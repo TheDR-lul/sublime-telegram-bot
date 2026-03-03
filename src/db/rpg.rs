@@ -641,10 +641,10 @@ mod tests {
     fn stamina_regeneration_works() {
         let now = Utc
             .with_ymd_and_hms(2026, 2, 19, 12, 0, 0)
-            .expect("valid test datetime");
+            .unwrap();
         let past = Utc
             .with_ymd_and_hms(2026, 2, 19, 11, 30, 0)
-            .expect("valid test datetime");
+            .unwrap();
         let player = super::RpgPlayer {
             id: 1,
             user_id: 1,

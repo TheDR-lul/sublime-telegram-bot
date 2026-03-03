@@ -328,8 +328,10 @@ pub async fn duel_move_callback(
         Ok((game, w)) => (game, w),
         Err(e) => {
             let msg = match e {
-                AppError::Config(ref s) if s.contains("not your turn") => "Не твой ход.",
-                AppError::Config(ref s) if s.contains("occupied") => "Клетка занята или уже освободилась.",
+                AppError::GameLogic(ref s) if s.contains("not your turn") => "Не твой ход.",
+                AppError::GameLogic(ref s) if s.contains("occupied") => {
+                    "Клетка занята или уже освободилась."
+                }
                 _ => "Нельзя походить.",
             };
             let _ = bot.answer_callback_query(query.id).text(msg).await;
@@ -415,7 +417,10 @@ async fn grant_duel_achievements(
         Ok(())
     }
 
-    if let Some(winner_uid) = duel_db::user_id_by_tg_id(pool, winner_tg_id).await? {
+    let winner_uid_opt = duel_db::user_id_by_tg_id(pool, winner_tg_id).await?;
+    let loser_uid_opt = duel_db::user_id_by_tg_id(pool, loser_tg_id).await?;
+
+    if let Some(winner_uid) = winner_uid_opt {
         let wins = duel_db::count_wins(pool, winner_tg_id).await?;
         if wins >= 1 {
             let _ = do_grant(bot, pool, chat_id, winner_uid, "duel_first_win", "Первая победа в дуэле").await;
@@ -427,7 +432,7 @@ async fn grant_duel_achievements(
             let _ = do_grant(bot, pool, chat_id, winner_uid, "duel_won_10", "Десятка в дуэлях").await;
         }
     }
-    if let Some(loser_uid) = duel_db::user_id_by_tg_id(pool, loser_tg_id).await? {
+    if let Some(loser_uid) = loser_uid_opt {
         let losses = duel_db::count_losses(pool, loser_tg_id).await?;
         if losses >= 1 {
             let _ = do_grant(bot, pool, chat_id, loser_uid, "duel_first_loss", "Первое поражение в дуэле").await;
@@ -446,7 +451,7 @@ async fn grant_duel_achievements(
             let _ = do_grant(bot, pool, chat_id, loser_uid, "duel_played_1", "Зашёл в дуэль").await;
         }
     }
-    if let Some(winner_uid) = duel_db::user_id_by_tg_id(pool, winner_tg_id).await? {
+    if let Some(winner_uid) = winner_uid_opt {
         let played = duel_db::count_played(pool, winner_tg_id).await?;
         if played >= 1 {
             let _ = do_grant(bot, pool, chat_id, winner_uid, "duel_played_1", "Зашёл в дуэль").await;

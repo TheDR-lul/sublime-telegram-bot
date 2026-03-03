@@ -2,6 +2,7 @@
 
 use regex::Regex;
 use sqlx::PgPool;
+use std::sync::LazyLock;
 use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::dptree::case;
 use teloxide::prelude::*;
@@ -14,6 +15,19 @@ use crate::handlers::{
     about, achievements as achievements_handler, commands::Cmd, game::commands as game,
     game::duel as game_duel, meme, misc, tiktok,
 };
+
+static PIDOR_YEAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^/pidor(\d{4})(?:@.+)?$").expect("pidor year regex is valid")
+});
+
+async fn check_rate_limit(
+    rl: &std::sync::Arc<crate::ratelimit::RateLimiter>,
+    msg: &teloxide::types::Message,
+) -> bool {
+    let chat_id = msg.chat.id.0;
+    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    rl.check(chat_id, user_id).await
+}
 
 async fn callback_router(
     bot: Bot,
@@ -122,12 +136,30 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         .branch(case![Cmd::Google(_s)].endpoint(misc::google_handler))
         // RPG: development for future — disabled; show stub message
         .branch(case![Cmd::Rpg].endpoint(misc::rpg_disabled_handler))
-        .branch(case![Cmd::Pidorscan(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, dedup: std::sync::Arc<crate::dedup::PidorscanDedup>| async move {
-            misc::pidorscan_handler(bot, msg, cmd, dedup).await
-        }))
-        .branch(case![Cmd::Pidor].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
-            game::pidor_handler(bot, msg, cmd, pool).await
-        }))
+        .branch(case![Cmd::Pidorscan(_s)].endpoint(
+            |bot: Bot,
+             msg: Message,
+             cmd: Cmd,
+             dedup: std::sync::Arc<crate::dedup::PidorscanDedup>,
+             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
+                if !check_rate_limit(&rl, &msg).await {
+                    return Ok(());
+                }
+                misc::pidorscan_handler(bot, msg, cmd, dedup).await
+            },
+        ))
+        .branch(case![Cmd::Pidor].endpoint(
+            |bot: Bot,
+             msg: Message,
+             cmd: Cmd,
+             pool: PgPool,
+             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
+                if !check_rate_limit(&rl, &msg).await {
+                    return Ok(());
+                }
+                game::pidor_handler(bot, msg, cmd, pool).await
+            },
+        ))
         .branch(case![Cmd::Pidorules].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidorules_handler(bot, msg, cmd, pool).await
         }))
@@ -155,20 +187,55 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         .branch(case![Cmd::Achievements].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             achievements_handler::achievements_handler(bot, msg, cmd, pool).await
         }))
-        .branch(case![Cmd::Meme].endpoint(|bot: Bot, msg: Message, cmd: Cmd| async move {
-            meme::meme_handler(bot, msg, cmd).await
-        }))
-        .branch(case![Cmd::Memeru].endpoint(|bot: Bot, msg: Message, _cmd: Cmd, config: Config| async move {
-            meme::memeru_handler(bot, msg, _cmd, config).await
-        }))
-        .branch(case![Cmd::Ttvideo(_s)].endpoint(tiktok::tt_video_handler))
-        .branch(case![Cmd::Ttlink(_s)].endpoint(tiktok::tt_link_handler))
+        .branch(case![Cmd::Meme].endpoint(
+            |bot: Bot,
+             msg: Message,
+             cmd: Cmd,
+             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
+                if !check_rate_limit(&rl, &msg).await {
+                    return Ok(());
+                }
+                meme::meme_handler(bot, msg, cmd).await
+            },
+        ))
+        .branch(case![Cmd::Memeru].endpoint(
+            |bot: Bot,
+             msg: Message,
+             _cmd: Cmd,
+             config: Config,
+             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
+                if !check_rate_limit(&rl, &msg).await {
+                    return Ok(());
+                }
+                meme::memeru_handler(bot, msg, _cmd, config).await
+            },
+        ))
+        .branch(case![Cmd::Ttvideo(_s)].endpoint(
+            |bot: Bot,
+             msg: Message,
+             cmd: Cmd,
+             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
+                if !check_rate_limit(&rl, &msg).await {
+                    return Ok(());
+                }
+                tiktok::tt_video_handler(bot, msg, cmd).await
+            },
+        ))
+        .branch(case![Cmd::Ttlink(_s)].endpoint(
+            |bot: Bot,
+             msg: Message,
+             cmd: Cmd,
+             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
+                if !check_rate_limit(&rl, &msg).await {
+                    return Ok(());
+                }
+                tiktok::tt_link_handler(bot, msg, cmd).await
+            },
+        ))
         .branch(dptree::endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
             use crate::handlers::game::commands;
-            let regex = Regex::new(r"^/pidor(\d{4})(?:@.+)?$")
-                .expect("pidor year regex is valid");
             if let Some(text) = msg.text()
-                && let Some(caps) = regex.captures(text)
+                && let Some(caps) = PIDOR_YEAR_RE.captures(text)
                 && let Ok(year) = caps[1].parse::<i32>()
             {
                 return commands::pidoryear_handler(bot, msg, year, pool).await;

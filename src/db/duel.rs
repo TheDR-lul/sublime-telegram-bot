@@ -70,6 +70,58 @@ pub fn check_win(board: &str) -> Option<char> {
     board_winner(board)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn board_winner_detects_row_win() {
+        let board = "111      ";
+        assert_eq!(board_winner(board), Some('1'));
+    }
+
+    #[test]
+    fn board_winner_detects_column_win() {
+        let board = "1  1  1  ";
+        assert_eq!(board_winner(board), Some('1'));
+    }
+
+    #[test]
+    fn board_winner_detects_diagonal_win() {
+        let board = "1   1   1";
+        assert_eq!(board_winner(board), Some('1'));
+    }
+
+    #[test]
+    fn board_winner_detects_anti_diagonal_win() {
+        let board = "  2 2 2  ";
+        assert_eq!(board_winner(board), Some('2'));
+    }
+
+    #[test]
+    fn board_winner_none_when_no_win() {
+        let board = "12 21 12 ";
+        assert_eq!(board_winner(board), None);
+    }
+
+    #[test]
+    fn apply_three_piece_limit_removes_oldest_piece() {
+        let board = "1 1 1    ";
+        let ts = "1,0,3,0,5,0,0,0,0";
+        let (new_board, new_ts) = apply_three_piece_limit(board, ts, '1');
+        assert_eq!(new_board.chars().nth(0), Some(' '));
+        assert_eq!(new_ts.split(',').next().unwrap(), "0");
+        assert_eq!(new_board.chars().nth(2), Some('1'));
+        assert_eq!(new_board.chars().nth(4), Some('1'));
+    }
+
+    #[test]
+    fn check_win_delegates_to_board_winner() {
+        let board = "   222   ";
+        assert_eq!(check_win(board), Some('2'));
+    }
+}
+
 /// Create pending duel. invite_message_id can be set after sending the message.
 pub async fn create(
     pool: &PgPool,
@@ -233,7 +285,7 @@ pub async fn make_move(
     player_tg_id: i64,
 ) -> Result<(DuelGame, Option<i64>), AppError> {
     if cell >= 9 {
-        return Err(AppError::Config("invalid cell".into()));
+        return Err(AppError::GameLogic("invalid cell".into()));
     }
     let mut tx = pool.begin().await?;
     let mut d = match sqlx::query_as::<_, DuelGame>(
@@ -250,12 +302,12 @@ pub async fn make_move(
         Some(x) => x,
         None => {
             let _ = tx.rollback().await;
-            return Err(AppError::Config("duel not found".into()));
+            return Err(AppError::NotFound("duel not found".into()));
         }
     };
     if d.status != "active" {
         let _ = tx.rollback().await;
-        return Err(AppError::Config("duel not active".into()));
+        return Err(AppError::GameLogic("duel not active".into()));
     }
     let current_player = if d.turn == 1 {
         d.player1_tg_id
@@ -264,7 +316,7 @@ pub async fn make_move(
     };
     if current_player != Some(player_tg_id) {
         let _ = tx.rollback().await;
-        return Err(AppError::Config("not your turn".into()));
+        return Err(AppError::GameLogic("not your turn".into()));
     }
 
     let mark = if d.turn == 1 { '1' } else { '2' };
@@ -277,7 +329,7 @@ pub async fn make_move(
         chars.resize(9, ' ');
     }
     if chars[cell] != ' ' {
-        return Err(AppError::Config("cell occupied".into()));
+        return Err(AppError::GameLogic("cell occupied".into()));
     }
     let now_secs = chrono::Utc::now().timestamp();
     chars[cell] = mark;

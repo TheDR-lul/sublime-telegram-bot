@@ -16,6 +16,8 @@ use crate::handlers::game::phrases::{
     already_registered_roasts, stage1, stage2, stage3, stage4, text_static,
 };
 
+use tokio_util::sync::CancellationToken;
+
 const GAME_RESULT_TIME_DELAY_SECS: u64 = 2;
 
 pub const PIDORULES_HTML: &str = "Правила игры <b>Пидор Дня</b> (только для групповых чатов):\n\
@@ -135,24 +137,6 @@ pub async fn send_pidorall(bot: &Bot, pool: &PgPool, chat_id: ChatId) -> Result<
     Ok(())
 }
 
-#[allow(dead_code)]
-fn _pidorules_placeholder_removed() {
-    let _ = "removed</b> (только для групповых чатов):\n\
-<b>1.</b> Зарегистрируйтесь в игру по команде /pidoreg\n\
-<b>2.</b> Подождите пока зарегиструются все (или большинство :)\n\
-<b>3.</b> Запустите розыгрыш по команде /pidor\n\
-<b>4.</b> Просмотр статистики канала по команде /pidorstats, /pidorall\n\
-<b>5.</b> Личная статистика по команде /pidorme\n\
-<b>6.</b> Статистика за последний год по команде /pidor2024 (например /pidor2020, /pidor2019 и т.д.)\n\
-<b>7. (!!! Только для администраторов чатов)</b>: удалить из игры может только Админ канала, сначала выведя по команде список игроков: /pidormin list\n\
-Удалить же игрока можно по команде (используйте идентификатор пользователя - цифры из списка пользователей): /pidormin del 123456\n\
-\n\
-<b>Важно</b>, розыгрыш проходит только <b>раз в день</b>, повторная команда выведет <b>результат</b> игры.\n\
-\n\
-Сброс розыгрыша происходит каждый день в 12 часов ночи по киевскому времени (UTC+2 / UTC+3 в зависимости от сезона).\n\n\
-Поддержать бота можно по <a href=\"https://github.com/TheDR-lul/sublime\">ссылке</a> :)";
-}
-
 pub async fn pidoreg_handler(
     bot: Bot,
     msg: Message,
@@ -230,7 +214,10 @@ pub async fn pidorunreg_handler(
         return Ok(());
     }
     let chat_id = msg.chat.id.0;
-    let from_user = msg.from.as_ref().ok_or_else(|| AppError::Config("No from user".into()))?;
+    let from_user = msg
+        .from
+        .as_ref()
+        .ok_or_else(|| AppError::GameLogic("No from user".into()))?;
     
     let tg_user = user::upsert_tg_user(&pool, from_user).await?;
     let game = game::get_or_create_game(&pool, chat_id).await?;
@@ -313,7 +300,7 @@ async fn run_pidor_game(
         if is_manual {
             let winner = game::get_user_by_id(pool, result.winner_id)
                 .await?
-                .ok_or_else(|| AppError::Config("Winner not found".into()))?;
+                .ok_or_else(|| AppError::NotFound("Winner not found".into()))?;
             let text = text_static::CURRENT_DAY_GAME_RESULT.replace(
                 "{username}",
                 &escape_html(&winner.full_username(false)),
@@ -444,7 +431,7 @@ impl PidorAutorunSlot {
 
 /// Background scheduler: runs Pidor game 3 times per day (morning/day/evening) in Kyiv timezone.
 /// Each slot fires at a random time within a 2-hour window.
-pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool) {
+pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool, shutdown: CancellationToken) {
     use std::collections::{HashMap, HashSet};
     use tokio::time::{sleep, Duration};
 
@@ -458,6 +445,9 @@ pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool) {
         let hour = now.hour() as i32;
         let minute = now.minute() as i32;
         let now_minutes = hour * 60 + minute;
+
+        fired.retain(|&(y, d, _)| y == year && d == day);
+        scheduled.retain(|&(y, d, _), _| y == year && d == day);
 
         for slot in [PidorAutorunSlot::Morning, PidorAutorunSlot::Day, PidorAutorunSlot::Evening] {
             let key = (year, day, slot);
@@ -491,7 +481,12 @@ pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool) {
             }
         }
 
-        sleep(Duration::from_secs(30)).await;
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                break;
+            }
+            _ = sleep(Duration::from_secs(30)) => {}
+        }
     }
 }
 
@@ -623,7 +618,10 @@ pub async fn pidoryear_handler(
     let db_results = game::stats_year(&pool, game.id, year).await?;
     if db_results.is_empty() {
         let from_user = msg.from.as_ref().map(|u| u.full_name()).unwrap_or_else(|| "user".to_string());
-        bot.send_message(msg.chat.id, text_static::ERROR_ZERO_PLAYERS.replace("{username}", &escape_html(&from_user)))
+        bot.send_message(
+            msg.chat.id,
+            text_static::ERROR_ZERO_PLAYERS.replace("{username}", &escape_html(&from_user)),
+        )
             .parse_mode(teloxide::types::ParseMode::Html)
             .await?;
         return Ok(());

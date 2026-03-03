@@ -9,6 +9,7 @@ use crate::handlers::about;
 use crate::handlers::game::commands as game_commands;
 
 use rand::prelude::*;
+use std::sync::LazyLock;
 use teloxide::types::ParseMode;
 use teloxide::utils::html::escape as escape_html;
 
@@ -276,9 +277,12 @@ pub async fn inline_handler(
     use rand::prelude::*;
     use teloxide::types::{InlineQueryResult, InlineQueryResultArticle, InputMessageContent, InputMessageContentText};
 
+    static WORD_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"([^\W\d_]{4,})").expect("word regex is valid")
+    });
+
     let mut shuffled = Vec::new();
-    let re = regex::Regex::new(r"([^\W\d_]{4,})").expect("word regex is valid");
-    for word in re.split(q) {
+    for word in WORD_RE.split(q) {
         if word.chars().all(|c| c.is_alphanumeric()) && word.len() >= 4 {
             let mut chars: Vec<char> = word.chars().collect();
             let first = chars.remove(0);

@@ -8,15 +8,10 @@ use crate::error::AppError;
 const GAME_SELECT: &str = "id, chat_id, autorun_enabled, autorun_morning, autorun_day, autorun_evening";
 
 pub async fn get_or_create_game(pool: &PgPool, chat_id: i64) -> Result<Game, AppError> {
-    if let Some(g) = sqlx::query_as::<_, Game>(&format!("SELECT {} FROM game WHERE chat_id = $1", GAME_SELECT))
-        .bind(chat_id)
-        .fetch_optional(pool)
-        .await?
-    {
-        return Ok(g);
-    }
     let game = sqlx::query_as::<_, Game>(&format!(
-        "INSERT INTO game (chat_id) VALUES ($1) RETURNING {}",
+        "INSERT INTO game (chat_id) VALUES ($1)
+         ON CONFLICT (chat_id) DO UPDATE SET chat_id = EXCLUDED.chat_id
+         RETURNING {}",
         GAME_SELECT
     ))
     .bind(chat_id)
@@ -37,10 +32,26 @@ pub async fn list_games_for_autorun_slot(
     pool: &PgPool,
     slot_column: &str,
 ) -> Result<Vec<Game>, AppError> {
-    let query = format!(
-        "SELECT {} FROM game WHERE autorun_enabled = true AND {} = true",
-        GAME_SELECT, slot_column
-    );
+    let query = match slot_column {
+        "autorun_morning" => format!(
+            "SELECT {} FROM game WHERE autorun_enabled = true AND autorun_morning = true",
+            GAME_SELECT
+        ),
+        "autorun_day" => format!(
+            "SELECT {} FROM game WHERE autorun_enabled = true AND autorun_day = true",
+            GAME_SELECT
+        ),
+        "autorun_evening" => format!(
+            "SELECT {} FROM game WHERE autorun_enabled = true AND autorun_evening = true",
+            GAME_SELECT
+        ),
+        other => {
+            return Err(crate::error::AppError::Config(format!(
+                "Invalid autorun slot column: {}",
+                other
+            )))
+        }
+    };
     let rows = sqlx::query_as::<_, Game>(&query).fetch_all(pool).await?;
     Ok(rows)
 }

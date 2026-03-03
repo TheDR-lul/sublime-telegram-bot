@@ -19,6 +19,15 @@ pub enum AppError {
     #[error("config error: {0}")]
     Config(String),
 
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("game logic error: {0}")]
+    GameLogic(String),
+
     #[error("yt-dlp error: {0}")]
     YtDlp(String),
 

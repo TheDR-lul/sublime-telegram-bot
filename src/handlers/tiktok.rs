@@ -1,6 +1,7 @@
 use regex::Regex;
 use sqlx::PgPool;
 use std::process::Stdio;
+use std::sync::LazyLock;
 use std::time::Duration;
 use teloxide::prelude::*;
 use teloxide::types::{InlineQuery, InlineQueryResult, Message};
@@ -13,6 +14,28 @@ use crate::error::AppError;
 
 const PROCESSING_STARTED: &str = "Processing started.....";
 const YT_DLP_TIMEOUT_SECS: u64 = 120;
+
+static TIKTOK_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^https?://[vmtw.]{0,5}tiktok\.com/").expect("tiktok url regex")
+});
+
+fn is_valid_tiktok_url(s: &str) -> bool {
+    TIKTOK_URL_RE.is_match(s.trim())
+}
+
+fn extract_tiktok_url(msg: &Message, arg: &str) -> Option<String> {
+    if !arg.trim().is_empty() {
+        return Some(arg.trim().to_string());
+    }
+    if let Some(reply) = msg.reply_to_message() {
+        if let Some(text) = reply.text() {
+            if text.len() > 10 {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
 
 async fn get_tt_video_info(url: &str, download: bool) -> Result<(String, Option<Vec<u8>>), AppError> {
     let mut cmd = Command::new("yt-dlp");
@@ -49,6 +72,7 @@ async fn get_tt_video_info(url: &str, download: bool) -> Result<(String, Option<
             .find(|l| l.starts_with("http"))
             .ok_or_else(|| AppError::YtDlp("No URL in output".into()))?
             .to_string();
+        let _ = tokio::fs::remove_file(video_path).await;
         Ok((video_link, Some(video_bytes)))
     } else {
         let video_link = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -62,27 +86,19 @@ pub async fn tt_video_handler(
     cmd: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
     let source_url = match &cmd {
-        crate::handlers::commands::Cmd::Ttvideo(s) if !s.is_empty() => s.clone(),
+        crate::handlers::commands::Cmd::Ttvideo(s) => extract_tiktok_url(&msg, s),
+        _ => None,
+    };
+
+    let source_url = match source_url {
+        Some(u) if is_valid_tiktok_url(&u) => u,
         _ => {
-            if let Some(reply) = msg.reply_to_message() {
-                if let Some(text) = reply.text() {
-                    if text.len() > 10 {
-                        text.to_string()
-                    } else {
-                        bot.send_message(msg.chat.id, "Provide a TikTok link after the command or reply to the link")
-                            .await?;
-                        return Ok(());
-                    }
-                } else {
-                    bot.send_message(msg.chat.id, "Provide a TikTok link after the command or reply to the link")
-                        .await?;
-                    return Ok(());
-                }
-            } else {
-                bot.send_message(msg.chat.id, "Provide a TikTok link after the command or reply to the link")
-                    .await?;
-                return Ok(());
-            }
+            bot.send_message(
+                msg.chat.id,
+                "Provide a valid TikTok link after the command or reply to the link",
+            )
+            .await?;
+            return Ok(());
         }
     };
 
@@ -122,27 +138,19 @@ pub async fn tt_link_handler(
     cmd: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
     let source_url = match &cmd {
-        crate::handlers::commands::Cmd::Ttlink(s) if !s.is_empty() => s.clone(),
+        crate::handlers::commands::Cmd::Ttlink(s) => extract_tiktok_url(&msg, s),
+        _ => None,
+    };
+
+    let source_url = match source_url {
+        Some(u) if is_valid_tiktok_url(&u) => u,
         _ => {
-            if let Some(reply) = msg.reply_to_message() {
-                if let Some(text) = reply.text() {
-                    if text.len() > 10 {
-                        text.to_string()
-                    } else {
-                        bot.send_message(msg.chat.id, "Provide a TikTok link after the command or reply to the link")
-                            .await?;
-                        return Ok(());
-                    }
-                } else {
-                    bot.send_message(msg.chat.id, "Provide a TikTok link after the command or reply to the link")
-                        .await?;
-                    return Ok(());
-                }
-            } else {
-                bot.send_message(msg.chat.id, "Provide a TikTok link after the command or reply to the link")
-                    .await?;
-                return Ok(());
-            }
+            bot.send_message(
+                msg.chat.id,
+                "Provide a valid TikTok link after the command or reply to the link",
+            )
+            .await?;
+            return Ok(());
         }
     };
 
@@ -170,9 +178,7 @@ pub async fn tt_inline_handler(
     config: Config,
 ) -> Result<(), AppError> {
     let q = query.query.trim();
-    let re = Regex::new(r"https?://[vmtw.]{0,5}tiktok.com/.*")
-        .expect("tiktok URL regex is valid");
-    if !re.is_match(q) {
+    if !TIKTOK_URL_RE.is_match(q) {
         return Ok(());
     }
 
