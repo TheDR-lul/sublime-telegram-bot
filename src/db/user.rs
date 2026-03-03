@@ -47,6 +47,16 @@ pub async fn upsert_tg_user(pool: &PgPool, from: &User) -> Result<TgUser, AppErr
     Ok(row)
 }
 
+pub async fn get_by_id(pool: &PgPool, id: i32) -> Result<Option<TgUser>, AppError> {
+    let row = sqlx::query_as::<_, TgUser>(
+        "SELECT id, tg_id, username, first_name, last_name, lang_code, is_blocked, created_at, updated_at, last_seen_at FROM tguser WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn get_by_tg_id(pool: &PgPool, tg_id: i64) -> Result<Option<TgUser>, AppError> {
     let row = sqlx::query_as::<_, TgUser>(
         "SELECT id, tg_id, username, first_name, last_name, lang_code, is_blocked, created_at, updated_at, last_seen_at FROM tguser WHERE tg_id = $1",

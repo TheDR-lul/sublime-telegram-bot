@@ -15,4 +15,3 @@ pub use achievements::*;
 pub use tiktok::*;
 pub use user::*;
 pub use rpg::*;
-pub use duel::*;

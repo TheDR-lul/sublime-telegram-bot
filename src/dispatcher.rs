@@ -46,6 +46,9 @@ async fn callback_router(
     if data.starts_with("settings:") {
         return game::pidorset_callback(bot, query, pool).await;
     }
+    if data.starts_with("ach:") {
+        return achievements_handler::achievements_callback(bot, query, pool).await;
+    }
     if data.starts_with("duel_accept:") {
         return game_duel::duel_accept_callback(bot, query, pool).await;
     }
