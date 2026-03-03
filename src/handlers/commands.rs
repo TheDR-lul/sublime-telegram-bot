@@ -65,6 +65,10 @@ pub enum Cmd {
     Huyasteal(String),
     #[command(description = "dick leaderboard")]
     Huyatop,
+    #[command(description = "skill tree for your dick")]
+    Huyaskills,
+    #[command(description = "shop for dick items and boosters")]
+    Huyashop,
     // RPG: development for future — disabled for now; /rpg shows stub message.
     #[command(description = "Pidor-Royale RPG (in development)")]
     Rpg,

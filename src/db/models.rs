@@ -172,6 +172,44 @@ pub struct Huya {
     pub actions_left: i32,
     pub actions_reset_at: NaiveDate,
     pub created_at: DateTime<Utc>,
+    // HP system
+    pub hp: i32,
+    // Skill points pool
+    pub skill_points: i32,
+    // Tier 1 — base skills (cap 20, cost 1 SP)
+    pub skill_shaft:   i32, // ATK +4%/lv
+    pub skill_skin:    i32, // DEF -3%/lv
+    pub skill_balls:   i32, // maxHP +15/lv
+    pub skill_cunning: i32, // steal chance +2.5%/lv
+    pub skill_stamina: i32, // HP regen +3/action/lv
+    // Tier 2 — specialisation (cap 15, cost 2 SP; unlock T1 >= 8)
+    pub skill_pierce:     i32, // ignore 4% enemy DEF/lv  (shaft>=8)
+    pub skill_scales:     i32, // -2.5% steal-vs-you/lv   (skin>=8)
+    pub skill_spirit:     i32, // +12 HP on round win/lv  (balls>=8)
+    pub skill_pickpocket: i32, // steal takes 3% XP/lv    (cunning>=8)
+    pub skill_dynamo:     i32, // +1 max action per 5 lv  (stamina>=8)
+    // Tier 3 — cross-branch combos (cap 10, cost 3 SP; require 2x T2 >= 5)
+    pub skill_eggtwist:    i32, // round 3 deals x2 dmg     (pierce+spirit>=5)
+    pub skill_bloodsucker: i32, // fight win = steal length  (pierce+pickpocket>=5)
+    pub skill_ironballs:   i32, // counter on dodge          (scales+spirit>=5)
+    pub skill_vortex:      i32, // round 1 always crits      (spirit+dynamo>=5)
+    pub skill_phantom:     i32, // 1 steal even at 0 actions (pickpocket+scales>=5)
+    // Tier 4 — hidden until T3 parent >= 7 (cap 5, cost 5 SP)
+    pub skill_berserker: i32, // hp<30% → ATK x2           (eggtwist>=7)
+    pub skill_vampire:   i32, // win heals from enemy HP    (bloodsucker>=7)
+    pub skill_fortress:  i32, // can't go below 1cm         (ironballs>=7)
+    pub skill_speedrun:  i32, // fights resolve in 1 round  (vortex>=7)
+    pub skill_ghost:     i32, // 30% dodge steal flat       (phantom>=7)
+    // Tier 5 — legendary, shown as ??? until prereqs (cap 3, cost 7 SP)
+    pub skill_eternal:  i32, // +15% everything/lv         (berserker+fortress>=3)
+    pub skill_absolute: i32, // +25% everything + title    (all T4>=1)
+    // Fight stats
+    pub fights_won:  i32,
+    pub fights_lost: i32,
+    // Temporary shop boosts (reset after use)
+    pub atk_boost:  i32,
+    pub def_boost:  i32,
+    pub grow_boost: i32,
 }
 
 impl Huya {
@@ -183,6 +221,73 @@ impl Huya {
 
     pub fn is_ass(&self) -> bool {
         self.length_mm < 0
+    }
+
+    /// Maximum HP: base 100 + 15 per skill_balls level + 15% per skill_eternal level.
+    pub fn max_hp(&self) -> i32 {
+        let base = 100 + self.skill_balls * 15;
+        let eternal_mult = 1.0 + self.skill_eternal as f64 * 0.15;
+        (base as f64 * eternal_mult) as i32
+    }
+
+    /// Maximum daily actions: base 20 + 1 per 5 levels of skill_dynamo.
+    /// (Base is 20 during development; will be tuned later via skill_dynamo.)
+    pub fn max_actions(&self) -> i32 {
+        20 + self.skill_dynamo / 5
+    }
+
+    /// HP as a visual bar of 10 characters (█ filled, ░ empty).
+    pub fn hp_bar(&self) -> String {
+        let max = self.max_hp().max(1);
+        let filled = ((self.hp.max(0) as f64 / max as f64) * 10.0).round() as usize;
+        let filled = filled.min(10);
+        format!("[{}{}]", "█".repeat(filled), "░".repeat(10 - filled))
+    }
+
+    /// Star display for small caps (e.g. toast): "★★★☆☆".
+    pub fn skill_stars(level: i32, cap: i32) -> String {
+        let cap_u = cap.max(1).min(10) as usize;
+        let filled = level.max(0).min(cap) as usize;
+        let filled = filled.min(cap_u);
+        let empty = cap_u.saturating_sub(filled);
+        format!("{}{}", "★".repeat(filled), "☆".repeat(empty))
+    }
+
+    /// Progress bar for a skill: `lv/cap  ████░░░░░░`.
+    pub fn skill_bar(level: i32, cap: i32) -> String {
+        let filled = if cap > 0 {
+            ((level as f64 / cap as f64) * 10.0).round() as usize
+        } else {
+            0
+        }
+        .min(10);
+        format!("{}/{}\t{}{}", level, cap, "█".repeat(filled), "░".repeat(10 - filled))
+    }
+
+    /// True when a Tier 4 skill is visible (T3 prereq reached).
+    pub fn t4_visible(&self, skill: &str) -> bool {
+        match skill {
+            "berserker" => self.skill_eggtwist >= 7,
+            "vampire"   => self.skill_bloodsucker >= 7,
+            "fortress"  => self.skill_ironballs >= 7,
+            "speedrun"  => self.skill_vortex >= 7,
+            "ghost"     => self.skill_phantom >= 7,
+            _ => false,
+        }
+    }
+
+    /// True when skill_eternal is visible (berserker+fortress >= 3 each).
+    pub fn eternal_visible(&self) -> bool {
+        self.skill_berserker >= 3 && self.skill_fortress >= 3
+    }
+
+    /// True when skill_absolute is visible (all T4 skills >= 1).
+    pub fn absolute_visible(&self) -> bool {
+        self.skill_berserker >= 1
+            && self.skill_vampire >= 1
+            && self.skill_fortress >= 1
+            && self.skill_speedrun >= 1
+            && self.skill_ghost >= 1
     }
 }
 

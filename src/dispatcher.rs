@@ -76,6 +76,12 @@ async fn callback_router(
     if data.starts_with("huya_fm:") {
         return huya_handler::huya_fight_move_callback(bot, query, pool).await;
     }
+    if data.starts_with("huya_skill:") {
+        return huya_handler::huya_skill_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_buy:") {
+        return huya_handler::huya_buy_callback(bot, query, pool).await;
+    }
     match data {
         "meme_en_refresh" => meme::meme_refresh_callback(bot, query).await,
         "meme_en_save" => meme::meme_save_callback(bot, query).await,
@@ -149,6 +155,8 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Huyafight(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyasteal(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyatop => huya_handler::huyatop_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyaskills => huya_handler::huyaskills_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyashop => huya_handler::huyashop_handler(bot, msg, cmd, pool).await,
                     }
                 }
                 UpdateKind::CallbackQuery(query) => callback_router(bot, query, pool, config).await,
@@ -228,6 +236,12 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }))
         .branch(case![Cmd::Huyatop].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             huya_handler::huyatop_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyaskills].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huyaskills_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyashop].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huyashop_handler(bot, msg, cmd, pool).await
         }))
         .branch(case![Cmd::Pidoreg].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidoreg_handler(bot, msg, cmd, pool).await

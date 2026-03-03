@@ -573,13 +573,14 @@ no_db            = "Статистика недоступна (не задан D
 
 # ── HuyActa (Тамагочи) ────────────────────────────────────────
 [huya]
-# {name} {size} {level} {xp} {actions_left}
+# {name} {size} {level} {xp} {actions_left} {hp} {max_hp} {hp_bar}
 status = """🍆 <b>Хуяка {name}:</b> {size} см (Уровень {level})
+💚 HP: {hp}/{max_hp} {hp_bar}
 ⚡ XP: {xp}/100  |  ❤️ Действий сегодня: {actions_left}/4"""
 
-# {name} {size} {actions_left}
+# {name} {size} {actions_left} {hp} {max_hp} {hp_bar}
 status_ass = """🍑 У <b>{name}</b> хуяки нет. Задница: {size} см
-❤️ Действий сегодня: {actions_left}/4"""
+💚 HP: {hp}/{max_hp} {hp_bar}  |  ❤️ Действий сегодня: {actions_left}/4"""
 
 # Регистрация — {name}
 reg_messages = [
@@ -603,25 +604,39 @@ no_actions_btn = "❤️ Нет действий"
 
 # {name} {grow_cm} {xp} {size}
 grow = "🌱 <b>{name}</b> погладил хуяку: +{grow_cm} см, +{xp} XP. Теперь: {size} см"
+# {name} {grow_cm} {xp} {size} — steroid was active
+grow_boosted = "💉 Стероид! <b>{name}</b> погладил с двойным ростом: +{grow_cm} см, +{xp} XP. Теперь: {size} см"
 # {name} {grow_cm} {xp} {level} {size}
-grow_levelup = "🎉 <b>{name}</b> погладил хуяку: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! Теперь: {size} см"
+grow_levelup = "🎉 <b>{name}</b> погладил хуяку: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
+# {name} {grow_cm} {xp} {level} {size} — steroid + level-up
+grow_levelup_boosted = "💉🎉 Стероид + УРОВЕНЬ UP! <b>{name}</b>: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
 
-# ── Бой (интерактивная мини-игра) ──────────────────────────────────────────
+# ── Бой (многораундовая мини-игра) ──────────────────────────────────────────
 # {challenger} {target} — challenger вызывает target на бой
-fight_challenge = "⚔️ <b>{challenger}</b> вызывает <b>{target}</b> на хуй-бой!\n\n🍆 Напор — бьёт В шары\n🎯 В шары — бьёт Финт\n🫸 Финт — бьёт Напор\n\n<i>Ничья: оба теряют -0.3 см</i>"
+fight_challenge = "⚔️ <b>{challenger}</b> вызывает <b>{target}</b> на хуй-бой!\n\n🍆 Напор — бьёт В шары\n🎯 В шары — бьёт Финт\n🫸 Финт — бьёт Напор\n\n<i>До 5 раундов. Побеждает тот, у кого больше HP.</i>"
 fight_accept_btn  = "⚔️ Принять"
 fight_decline_btn = "🏃 Слинять"
 
-# {challenger} {target} — оба выбирают тактику
-fight_picking = "⚔️ <b>{challenger}</b> vs <b>{target}</b>\n\nВыбирайте тактику!"
+# {challenger} {target} {ch_hp} {ch_max_hp} {ch_bar} {tg_hp} {tg_max_hp} {tg_bar} {round}
+fight_round_status = """⚔️ <b>{challenger}</b> 💚{ch_hp}/{ch_max_hp} {ch_bar}
+vs
+🗡️ <b>{target}</b> 💚{tg_hp}/{tg_max_hp} {tg_bar}
+
+Раунд {round}/5 — выберите тактику!"""
+
 # {name} — кто-то уже выбрал
 fight_waiting = "⏳ <b>{name}</b> выбрал тактику, ждём соперника..."
-# {challenger_pick} {target_pick} {winner} {loser} {steal_cm} {elo_gain}
-fight_result_win = "⚔️ {challenger_pick} vs {target_pick}\n\n🏆 <b>{winner}</b> победил <b>{loser}</b> и урвал {steal_cm} см! +{elo_gain} ELO"
-# {ch_pick} {tg_pick}
-fight_result_tie = "🤝 {ch_pick} vs {tg_pick} — ничья! Оба потеряли -0.3 см."
+
+# Итог раунда: {round} {ch_pick} {tg_pick} {winner} {loser} {damage}
+fight_round_win = "⚔️ Раунд {round}: {ch_pick} vs {tg_pick}\n💥 <b>{winner}</b> наносит <b>{damage}</b> урона!"
+fight_round_tie = "⚔️ Раунд {round}: {ch_pick} vs {tg_pick} — оба получают 5 урона!"
+
+# Итог боя: {winner} {loser} {steal_cm} {elo_gain}
+fight_result_win = "🏆 <b>{winner}</b> победил <b>{loser}</b> и урвал {steal_cm} см! +{elo_gain} ELO"
+fight_result_draw = "🤝 Боевая ничья! Оба пережили 5 раундов с равным HP. Размер не изменился."
+
 fight_declined   = "🏃 <b>{name}</b> слился. Бой отменён."
-fight_no_target  = "Укажи цель: /huya fight @user или ответом на сообщение."
+fight_no_target  = "Укажи цель: /huyafight @user или ответом на сообщение."
 # {name} {new_size}
 fight_self    = "🫠 <b>{name}</b> засунул хуяку себе в жопу... -0.5 см. Теперь: {new_size} см"
 fight_self_bot = "🤖 У бота нет хуяки. Иди на живых людей нападай."
@@ -647,4 +662,76 @@ top_header   = "<b>🍆 Топ хуяк чата:</b>\n\n"
 top_entry    = "{medal} <b>{name}</b> — {size} см (ур. {level})\n"
 # {medal} {name} {size}
 top_entry_ass = "{medal} 🍑 <b>{name}</b> — задница {size} см\n"
-top_empty    = "Никто ещё не вырастил хуяку. Начни с /huya grow!"
+top_empty    = "Никто ещё не вырастил хуяку. Начни с /huyagrow!"
+
+# ── Скиллы (/huyaskills) ─────────────────────────────────────────────────────
+# {name} {sp}
+skills_header = "🧬 <b>Навыки {name}</b>  (Очков: {sp})"
+skills_tier1   = "\n━━ I: ОСНОВЫ ━━━━━━━━━━━━━━━━━━━"
+skills_tier2   = "\n━━ II: СПЕЦИАЛИЗАЦИЯ ━━━━━━━━━━"
+skills_tier3   = "\n━━ III: КОМБО ━━━━━━━━━━━━━━━━━"
+skills_tier4   = "\n━━ IV: СКРЫТЫЕ ━━━━━━━━━━━━━━━━"
+skills_tier4_hidden = "\n━━ IV: ??? (заблокировано) ━━━━"
+skills_tier5   = "\n━━ V: ЛЕГЕНДАРНЫЕ ━━━━━━━━━━━━"
+skills_tier5_hidden = "\n━━ V: ??? ━━━━━━━━━━━━━━━━━━━━━"
+
+skills_no_points = "❌ Нет очков навыков. Повышай уровень хуяки чтобы получить очки!"
+skill_upgraded   = "✅ <b>{skill_name}</b> прокачан! Теперь: {stars}"
+skill_max        = "❌ Навык уже на максимуме или не хватает очков."
+skill_lock_all_t4 = "все T4 >= 1"
+
+# Tier 1
+skill_name_shaft   = "🍆 Стержень"
+skill_name_skin    = "🛡 Кожура"
+skill_name_balls   = "🥚 Яйца"
+skill_name_cunning = "🤌 Хитрость"
+skill_name_stamina  = "⚡ Выносливость"
+# Tier 2
+skill_name_pierce     = "🗡 Пробой"
+skill_name_scales     = "🐍 Чешуя"
+skill_name_spirit     = "💥 Боевой дух"
+skill_name_pickpocket = "🥷 Карманник"
+skill_name_dynamo     = "🔋 Динамо"
+# Tier 3
+skill_name_eggtwist    = "🥚💥 Яйцекрут"
+skill_name_bloodsucker = "🩸 Кровопийца"
+skill_name_ironballs   = "🪨 Железные яйца"
+skill_name_vortex      = "🌀 Хуёвый вихрь"
+skill_name_phantom     = "👻 Призрачный хуй"
+# Tier 4
+skill_name_berserker = "🔥 Берсерк"
+skill_name_vampire   = "🧛 Вампир"
+skill_name_fortress  = "🏰 Цитадель"
+skill_name_speedrun  = "⚡💨 Спидран"
+skill_name_ghost     = "🫥 Призрак"
+# Tier 5
+skill_name_eternal  = "🍆♾️ Вечная Хуяка"
+skill_name_absolute = "💫 Абсолютный Пидор"
+
+# ── Магазин (/huyashop) ───────────────────────────────────────────────────────
+# {size} — текущий размер игрока
+shop_header = """🏪 <b>Магазин хуяк</b>
+Твоя длина: <b>{size} см</b>
+
+💊 <b>Зелье</b> — 2.0 см   +50 HP прямо сейчас
+⚡ <b>Адреналин</b> — 3.0 см   +35% атаки на 1 файт
+🛡 <b>Броня</b> — 3.0 см   -35% урона на 1 файт
+💉 <b>Стероид</b> — 2.0 см   следующий рост ×2
+🔋 <b>Энергетик</b> — 5.0 см   +1 действие сегодня"""
+
+buy_btn_potion     = "💊 Зелье"
+buy_btn_adrenaline = "⚡ Адреналин"
+buy_btn_armor      = "🛡 Броня"
+buy_btn_steroid    = "💉 Стероид"
+buy_btn_energy     = "🔋 Энергетик"
+
+# {hp} {max_hp}
+buy_success_potion     = "💊 Зелье выпито! +50 HP. Сейчас: {hp}/{max_hp}"
+buy_success_adrenaline = "⚡ Адреналин влит! ATK +35% на следующий файт."
+buy_success_armor      = "🛡 Броня надета! DEF -35% на следующий файт."
+buy_success_steroid    = "💉 Стероид введён! Следующий рост ×2."
+buy_success_energy     = "🔋 Энергетик выпит! +1 действие."
+
+# {cost} {size}
+buy_fail_broke   = "❌ Мало длины! Нужно {cost} см, у тебя {size} см."
+buy_fail_unknown = "❌ Неизвестный предмет."
