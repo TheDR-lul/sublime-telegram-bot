@@ -631,6 +631,24 @@ fn skill_upgrade_info(huya: &Huya, skill: &str) -> Option<(&'static str, i32, i3
     Some((col, cost, cap, true))
 }
 
+/// Ordered list of all skill IDs (T1..T5) for UI.
+const SKILL_ORDER: &[&str] = &[
+    "shaft", "skin", "balls", "cunning", "stamina",
+    "pierce", "scales", "spirit", "pickpocket", "dynamo",
+    "eggtwist", "bloodsucker", "ironballs", "vortex", "phantom",
+    "berserker", "vampire", "fortress", "speedrun", "ghost",
+    "eternal", "absolute",
+];
+
+/// Returns skill IDs that can be upgraded right now (visible, prereqs met, under cap, enough SP).
+pub fn skills_available_to_upgrade(huya: &Huya) -> Vec<&'static str> {
+    SKILL_ORDER
+        .iter()
+        .filter(|s| skill_upgrade_info(huya, s).is_some())
+        .copied()
+        .collect()
+}
+
 /// Spend skill_points to level up a skill. Returns updated Huya on success.
 pub async fn upgrade_skill(pool: &PgPool, huya: &Huya, skill: &str) -> Result<Option<Huya>, AppError> {
     let Some((col, cost, _cap, _)) = skill_upgrade_info(huya, skill) else {

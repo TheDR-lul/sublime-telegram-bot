@@ -681,6 +681,8 @@ skills_no_points = "❌ Нет очков навыков. Повышай уро�
 skill_upgraded   = "✅ <b>{skill_name}</b> прокачан! Теперь: {stars}"
 skill_max        = "❌ Навык уже на максимуме или не хватает очков."
 skill_lock_all_t4 = "все T4 >= 1"
+skills_prev = "◀ Назад"
+skills_next = "Вперёд ▶"
 
 # Tier 1
 skill_name_shaft   = "🍆 Стержень"

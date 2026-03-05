@@ -76,6 +76,9 @@ async fn callback_router(
     if data.starts_with("huya_fm:") {
         return huya_handler::huya_fight_move_callback(bot, query, pool).await;
     }
+    if data.starts_with("huya_skill_page:") {
+        return huya_handler::huya_skill_page_callback(bot, query, pool).await;
+    }
     if data.starts_with("huya_skill:") {
         return huya_handler::huya_skill_callback(bot, query, pool).await;
     }
