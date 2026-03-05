@@ -230,10 +230,10 @@ impl Huya {
         (base as f64 * eternal_mult) as i32
     }
 
-    /// Maximum daily actions: base 20 + 1 per 5 levels of skill_dynamo.
-    /// (Base is 20 during development; will be tuned later via skill_dynamo.)
+    /// Maximum daily actions: base 4 + 1 per 5 levels of skill_dynamo.
+    /// Dynamo slowly increases the cap for активные задроты.
     pub fn max_actions(&self) -> i32 {
-        20 + self.skill_dynamo / 5
+        4 + self.skill_dynamo / 5
     }
 
     /// HP as a visual bar of 10 characters (█ filled, ░ empty).
@@ -289,6 +289,23 @@ impl Huya {
             && self.skill_speedrun >= 1
             && self.skill_ghost >= 1
     }
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaInventoryItem {
+    pub id: i32,
+    pub chat_id: i64,
+    pub tg_id: i64,
+    pub item_id: String,
+    pub acquired_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaEquipmentSlot {
+    pub chat_id: i64,
+    pub tg_id: i64,
+    pub slot: String,
+    pub inventory_id: i32,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

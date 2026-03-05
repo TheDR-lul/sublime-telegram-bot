@@ -270,12 +270,16 @@ async fn run_watchdog_commands_set() -> Result<(), AppError> {
     let commands = [
         BotCommand::new("status", "is main bot running"),
         BotCommand::new("stats", "chats and users count"),
+        BotCommand::new("huyaenergy", "toggle Huya energy limit (on/off/status)"),
     ];
     bot.set_my_commands(commands.clone())
         .scope(BotCommandScope::Default)
         .await?;
     bot.set_my_commands(commands.clone())
         .scope(BotCommandScope::AllPrivateChats)
+        .await?;
+    bot.set_my_commands(commands.clone())
+        .scope(BotCommandScope::AllGroupChats)
         .await?;
     let me = bot.get_me().await?;
     println!("Watchdog commands set for @{}", me.username.as_deref().unwrap_or("bot"));
@@ -400,6 +404,70 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
         Ok(())
     }
 
+    async fn huyaenergy_handler(
+        bot: teloxide::Bot,
+        msg: Message,
+        pool: Option<sqlx::PgPool>,
+    ) -> Result<(), AppError> {
+        use sublime::db::kv;
+
+        let pool = if let Some(p) = pool {
+            p
+        } else {
+            bot.send_message(msg.chat.id, "БД недоступна (не задан DATABASE_URL).").await?;
+            return Ok(());
+        };
+
+        // Ограничим управление лимитом только алерт-чатом, если он задан.
+        if let Ok(alert_chat) = std::env::var("ALERT_CHAT_ID") {
+            if let Ok(alert_id) = alert_chat.parse::<i64>() {
+                if msg.chat.id.0 != alert_id {
+                    bot.send_message(msg.chat.id, "Эта команда доступна только в алерт-чате.").await?;
+                    return Ok(());
+                }
+            }
+        }
+
+        let text = msg.text().unwrap_or("").trim();
+        let mut parts = text.split_whitespace();
+        let _cmd = parts.next();
+        let arg = parts.next().unwrap_or("status");
+
+        let current = kv::get(&pool, 0, "huya_energy_limit")
+            .await?
+            .map(|i| i.value)
+            .unwrap_or_else(|| "1".to_string());
+
+        match arg {
+            "on" => {
+                kv::set(&pool, 0, "huya_energy_limit", "1").await?;
+                bot.send_message(
+                    msg.chat.id,
+                    "Лимит энергии для хуяки: ВКЛ (ограничение по действиям включено).",
+                )
+                .await?;
+            }
+            "off" => {
+                kv::set(&pool, 0, "huya_energy_limit", "0").await?;
+                bot.send_message(
+                    msg.chat.id,
+                    "Лимит энергии для хуяки: ВЫКЛ (действий бесконечно, растите хуяки сколько хотите).",
+                )
+                .await?;
+            }
+            _ => {
+                let status = if current == "0" {
+                    "сейчас: ВЫКЛ."
+                } else {
+                    "сейчас: ВКЛ."
+                };
+                let reply = format!("Лимит энергии для хуяки {}", status);
+                bot.send_message(msg.chat.id, reply).await?;
+            }
+        }
+        Ok(())
+    }
+
     use teloxide::dispatching::UpdateFilterExt;
     use teloxide::types::Update;
     let container_clone = container.clone();
@@ -409,8 +477,12 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
             msg.text()
                 .map(|t| {
                     let t = t.trim();
-                    t.starts_with("/status") || t.eq_ignore_ascii_case("status")
-                        || t.starts_with("/stats") || t.eq_ignore_ascii_case("stats")
+                    t.starts_with("/status")
+                        || t.eq_ignore_ascii_case("status")
+                        || t.starts_with("/stats")
+                        || t.eq_ignore_ascii_case("stats")
+                        || t.starts_with("/huyaenergy")
+                        || t.eq_ignore_ascii_case("huyaenergy")
                 })
                 .unwrap_or(false)
         })
@@ -419,10 +491,13 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
             let container = container_clone.clone();
             let pool = pool_clone.clone();
             async move {
-                if text.trim().starts_with("/status") || text.trim().eq_ignore_ascii_case("status") {
+                let trimmed = text.trim();
+                if trimmed.starts_with("/status") || trimmed.eq_ignore_ascii_case("status") {
                     status_handler(bot, msg, container).await
-                } else {
+                } else if trimmed.starts_with("/stats") || trimmed.eq_ignore_ascii_case("stats") {
                     stats_handler(bot, msg, pool).await
+                } else {
+                    huyaenergy_handler(bot, msg, pool).await
                 }
             }
         });

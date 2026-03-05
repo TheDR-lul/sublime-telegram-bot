@@ -576,11 +576,13 @@ no_db            = "Статистика недоступна (не задан D
 # {name} {size} {level} {xp} {actions_left} {hp} {max_hp} {hp_bar}
 status = """🍆 <b>Хуяка {name}:</b> {size} см (Уровень {level})
 💚 HP: {hp}/{max_hp} {hp_bar}
-⚡ XP: {xp}/100  |  ❤️ Действий сегодня: {actions_left}/4"""
+⚡ XP: {xp}/100  |  ❤️ Действий сегодня: {actions_left}/{max_actions}"""
 
 # {name} {size} {actions_left} {hp} {max_hp} {hp_bar}
 status_ass = """🍑 У <b>{name}</b> хуяки нет. Задница: {size} см
-💚 HP: {hp}/{max_hp} {hp_bar}  |  ❤️ Действий сегодня: {actions_left}/4"""
+💚 HP: {hp}/{max_hp} {hp_bar}  |  ❤️ Действий сегодня: {actions_left}/{max_actions}"""
+
+equipment_header = "⚔️ Снаряжение:"
 
 # Регистрация — {name}
 reg_messages = [
@@ -657,7 +659,7 @@ steal_self_bot = "🤖 Бот не хранит хуяку. Иди к людям
 no_actions   = "❤️ Действий на сегодня не осталось. Возвращайся завтра!"
 
 # Топ
-top_header   = "<b>🍆 Топ хуяк чата:</b>\n\n"
+top_header   = "<b>🍆 Топ хуяк (глобально):</b>\n\n"
 # {medal} {name} {size} {level}
 top_entry    = "{medal} <b>{name}</b> — {size} см (ур. {level})\n"
 # {medal} {name} {size}
@@ -735,3 +737,54 @@ buy_success_energy     = "🔋 Энергетик выпит! +1 действи�
 # {cost} {size}
 buy_fail_broke   = "❌ Мало длины! Нужно {cost} см, у тебя {size} см."
 buy_fail_unknown = "❌ Неизвестный предмет."
+
+# ── Снаряжение хуяки (инвентарь) ──────────────────────────────────────────────
+
+[huya.items]
+ring_copper_name = "🥉 Медное кольцо"
+ring_copper_desc = "+8 атаки."
+ring_steel_name  = "⚙️ Стальное кольцо"
+ring_steel_desc  = "+15 атаки, +8 защиты."
+ring_gold_name   = "💛 Золотое кольцо"
+ring_gold_desc   = "+25 атаки, +15 защиты. Только дроп."
+ring_ruby_name   = "💢 Рубиновый перстень"
+ring_ruby_desc   = "+35 атаки, +5 урона по врагу каждый раунд. Только дроп."
+ring_eternal_name = "🌀 Кольцо Вечности"
+ring_eternal_desc = "+50 ко всем параметрам. Очень редкий дроп."
+
+tip_acorn_name   = "🌰 Стальной желудь"
+tip_acorn_desc   = "+10% шанса кражи."
+tip_spike_name   = "🗡️ Шип ярости"
+tip_spike_desc   = "+10% пробоя защиты. Только дроп."
+tip_platinum_name = "💎 Платиновый шлем"
+tip_platinum_desc = "+20% шанса крита. Только дроп."
+
+base_belt_name   = "🪢 Кожаный ремень"
+base_belt_desc   = "+30 max HP."
+base_iron_name   = "🛡️ Железный обруч"
+base_iron_desc   = "-10% входящего урона."
+base_anchor_name = "⚓ Анкерный зажим"
+base_anchor_desc = "Не даёт длине упасть ниже 1 см. Только дроп."
+
+balls_steel_name = "🔩 Стальные яйца"
+balls_steel_desc = "+20 HP регена за действие."
+balls_fire_name  = "🔥 Огненные яйца"
+balls_fire_desc  = "Берсерк включается при 50% HP вместо 30%."
+balls_fate_name  = "✨ Яйца Судьбы"
+balls_fate_desc  = "+20% XP за действия. Очень редкий дроп."
+
+[huya.inventory]
+header = """🎒 <b>Инвентарь {name}</b>
+
+Хуяка: <b>{size} см</b>
+Предметов: <b>{count}</b>
+
+Нажми на предмет, чтобы надеть или продать."""
+empty  = "Инвентарь пуст. Зайди в /huyashop или лутай кольца в боях."
+equip_btn = "Надеть"
+unequip_btn = "Снять"
+sell_btn = "Продать (-30%)"
+equip_success = "✅ {item} экипирован в слот {slot}."
+unequip_success = "✅ Слот {slot} освобождён."
+sell_success = "💸 Ты продал {item} и потерял {cost_cm} см длины (возврат 30%)."
+equip_fail = "❌ Нельзя экипировать этот предмет."

@@ -29,14 +29,48 @@ fn hp_bar_str(current: i32, max: i32) -> String {
     format!("[{}{}]", "█".repeat(filled), "░".repeat(10 - filled))
 }
 
+/// Build equipment summary string for status.
+fn equipment_summary(
+    equ: &[crate::db::models::HuyaEquipmentSlot],
+    inv: &[crate::db::models::HuyaInventoryItem],
+) -> String {
+    let mut by_slot: std::collections::HashMap<&str, &crate::db::models::HuyaInventoryItem> =
+        std::collections::HashMap::new();
+    for e in equ {
+        if let Some(item) = inv.iter().find(|i| i.id == e.inventory_id) {
+            by_slot.insert(e.slot.as_str(), item);
+        }
+    }
+    let slot_line = |name: &str, slot: &str| {
+        if let Some(item) = by_slot.get(slot) {
+            format!("{}: {}", name, item.item_id)
+        } else {
+            format!("{}: —", name)
+        }
+    };
+    let mut lines = Vec::new();
+    lines.push(slot_line("ring_1", "ring_1"));
+    lines.push(slot_line("ring_2", "ring_2"));
+    lines.push(slot_line("ring_3", "ring_3"));
+    lines.push(slot_line("ring_4", "ring_4"));
+    lines.push(slot_line("ring_5", "ring_5"));
+    lines.push(slot_line("ring_6", "ring_6"));
+    lines.push(slot_line("tip", "tip"));
+    lines.push(slot_line("base", "base"));
+    lines.push(slot_line("balls", "balls"));
+    lines.join("\n")
+}
+
 /// Build the status text for a player.
-fn huya_status_text(h: &Huya, name: &str) -> String {
+fn huya_status_text(h: &Huya, name: &str, equ: &[crate::db::models::HuyaEquipmentSlot], inv: &[crate::db::models::HuyaInventoryItem]) -> String {
     let max_hp = h.max_hp();
+    let max_actions = h.max_actions();
     let base = if h.is_ass() {
         LOCALE.t_fmt("ru", "huya.status_ass", &[
             ("name",         &escape_html(name)),
             ("size",         &h.display_cm()),
             ("actions_left", &h.actions_left.to_string()),
+            ("max_actions",  &max_actions.to_string()),
             ("hp",           &h.hp.to_string()),
             ("max_hp",       &max_hp.to_string()),
             ("hp_bar",       &h.hp_bar()),
@@ -48,12 +82,14 @@ fn huya_status_text(h: &Huya, name: &str) -> String {
             ("level",        &h.level.to_string()),
             ("xp",           &h.xp.to_string()),
             ("actions_left", &h.actions_left.to_string()),
+            ("max_actions",  &max_actions.to_string()),
             ("hp",           &h.hp.to_string()),
             ("max_hp",       &max_hp.to_string()),
             ("hp_bar",       &h.hp_bar()),
         ])
     };
-    format!("{}\n\n{}", base, LOCALE.t("ru", "huya.hint"))
+    let eq_text = equipment_summary(equ, inv);
+    format!("{}\n\n{}\n\n{}", base, LOCALE.t("ru", "huya.equipment_header"), eq_text)
 }
 
 fn huya_stat_keyboard(tg_id: i64, has_actions: bool) -> InlineKeyboardMarkup {
@@ -209,7 +245,9 @@ async fn handle_stat(
             .parse_mode(teloxide::types::ParseMode::Html)
             .await?;
     }
-    bot.send_message(chat_id, huya_status_text(&h, name))
+    let equ = huya_db::get_equipment(pool, chat_id_raw, tg_id).await.unwrap_or_default();
+    let inv = huya_db::get_inventory(pool, chat_id_raw, tg_id).await.unwrap_or_default();
+    bot.send_message(chat_id, huya_status_text(&h, name, &equ, &inv))
         .parse_mode(teloxide::types::ParseMode::Html)
         .reply_markup(huya_stat_keyboard(tg_id, actions_available(&h)))
         .await?;
@@ -311,7 +349,9 @@ pub async fn huya_grow_callback(
         .text(format!("+{} см", mm_to_cm_str(grow_mm)))
         .await;
 
-    let _ = bot.edit_message_text(msg_ref.chat().id, msg_ref.id(), huya_status_text(&updated, &name))
+    let equ = huya_db::get_equipment(&pool, chat_id.0, clicker).await.unwrap_or_default();
+    let inv = huya_db::get_inventory(&pool, chat_id.0, clicker).await.unwrap_or_default();
+    let _ = bot.edit_message_text(msg_ref.chat().id, msg_ref.id(), huya_status_text(&updated, &name, &equ, &inv))
         .parse_mode(teloxide::types::ParseMode::Html)
         .reply_markup(huya_stat_keyboard(clicker, actions_available(&updated)))
         .await;
@@ -789,10 +829,12 @@ pub async fn huyareg_handler(
     let text = if was_created {
         LOCALE.t_rand_fmt("ru", "huya.reg_messages", &[("name", &escape_html(&name))])
     } else {
+        let equ = huya_db::get_equipment(&pool, chat_id_raw, tg_id).await.unwrap_or_default();
+        let inv = huya_db::get_inventory(&pool, chat_id_raw, tg_id).await.unwrap_or_default();
         format!(
             "{}\n\n{}",
             LOCALE.t("ru", "huya.already_registered"),
-            huya_status_text(&h, &name),
+            huya_status_text(&h, &name, &equ, &inv),
         )
     };
 

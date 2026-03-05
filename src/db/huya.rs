@@ -2,7 +2,7 @@
 //!
 //! Each chat × user pair has one Huya row.
 //! length_mm < 0 means the user is growing an ass instead of a dick.
-//! Daily action limit = 20 during development (base from max_actions(); later tuned via Dynamo skill).
+//! Daily action limit = max_actions() (base 4 + Dynamo bonus).
 //!
 //! HP is persistent; replenishes on consume_action (+10 + skill_stamina*3, capped at max_hp()).
 //! Skills: 20-tier tree (T1-5) levelled via upgrade_skill() using skill_points earned on level-up.
@@ -12,7 +12,8 @@ use chrono::{DateTime, Utc};
 use rand::RngExt;
 use sqlx::PgPool;
 
-use crate::db::models::Huya;
+use crate::db::kv;
+use crate::db::models::{Huya, HuyaEquipmentSlot, HuyaInventoryItem};
 use crate::error::AppError;
 
 const HUYA_SELECT: &str =
@@ -48,6 +49,17 @@ const COST_T5: i32 = 7;
 
 /// Returns (Huya, was_created). `was_created` is true only on first insert.
 pub async fn get_or_create(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<(Huya, bool), AppError> {
+    // Global Huya per user: first try to find by tg_id regardless of chat.
+    if let Some(existing) = sqlx::query_as::<_, Huya>(
+        &format!("SELECT {HUYA_SELECT} FROM huya WHERE tg_id = $1 ORDER BY created_at LIMIT 1"),
+    )
+    .bind(tg_id)
+    .fetch_optional(pool)
+    .await?
+    {
+        return Ok((existing, false));
+    }
+
     let inserted = sqlx::query_as::<_, Huya>(
         &format!("INSERT INTO huya (chat_id, tg_id) VALUES ($1, $2)
          ON CONFLICT (chat_id, tg_id) DO NOTHING
@@ -63,9 +75,8 @@ pub async fn get_or_create(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<(H
     }
 
     let h = sqlx::query_as::<_, Huya>(
-        &format!("SELECT {HUYA_SELECT} FROM huya WHERE chat_id = $1 AND tg_id = $2"),
+        &format!("SELECT {HUYA_SELECT} FROM huya WHERE tg_id = $1 ORDER BY created_at LIMIT 1"),
     )
-    .bind(chat_id)
     .bind(tg_id)
     .fetch_one(pool)
     .await?;
@@ -75,6 +86,16 @@ pub async fn get_or_create(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<(H
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 
+async fn energy_limit_enabled(pool: &PgPool, chat_id: i64) -> Result<bool, AppError> {
+    // Per-plan: allow turning energy limit on/off at runtime via KV.
+    // Key: "huya_energy_limit", chat_id=0 for global flag.
+    if let Some(item) = kv::get(pool, 0, "huya_energy_limit").await? {
+        Ok(item.value != "0")
+    } else {
+        Ok(true)
+    }
+}
+
 /// Consume one action and regenerate HP (+10 + skill_stamina*3, capped at max_hp).
 /// Returns false if no actions left today.
 pub async fn consume_action(pool: &PgPool, huya: &Huya) -> Result<bool, AppError> {
@@ -82,6 +103,61 @@ pub async fn consume_action(pool: &PgPool, huya: &Huya) -> Result<bool, AppError
     let max_hp = huya.max_hp();
     let max_actions = huya.max_actions();
     let hp_regen = 10 + huya.skill_stamina * 3;
+
+    // #region agent log
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug-749781.log")
+    {
+        use std::io::Write;
+        let payload = format!(
+            "{{\"sessionId\":\"749781\",\"runId\":\"pre-fix\",\"hypothesisId\":\"A\",\"location\":\"src/db/huya.rs:consume_action\",\"message\":\"consume_action_enter\",\"data\":{{\"huya_id\":{},\"chat_id\":{},\"actions_left\":{},\"actions_reset_at\":\"{}\",\"today\":\"{}\",\"max_actions\":{},\"hp\":{},\"hp_regen\":{}}},\"timestamp\":{}}}\n",
+            huya.id,
+            huya.chat_id,
+            huya.actions_left,
+            huya.actions_reset_at,
+            today,
+            max_actions,
+            huya.hp,
+            hp_regen,
+            chrono::Utc::now().timestamp_millis()
+        );
+        let _ = f.write_all(payload.as_bytes());
+    }
+    // #endregion
+
+    let limit_enabled = energy_limit_enabled(pool, huya.chat_id).await?;
+
+    // #region agent log
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug-749781.log")
+    {
+        use std::io::Write;
+        let payload = format!(
+            "{{\"sessionId\":\"749781\",\"runId\":\"pre-fix\",\"hypothesisId\":\"B\",\"location\":\"src/db/huya.rs:consume_action\",\"message\":\"consume_action_limit_flag\",\"data\":{{\"huya_id\":{},\"limit_enabled\":{}}},\"timestamp\":{}}}\n",
+            huya.id,
+            limit_enabled,
+            chrono::Utc::now().timestamp_millis()
+        );
+        let _ = f.write_all(payload.as_bytes());
+    }
+    // #endregion
+
+    // If limit is globally disabled — only regenerate HP, do not touch actions_left.
+    if !limit_enabled {
+        sqlx::query(
+            "UPDATE huya SET hp = LEAST(hp + $1, $2) WHERE id = $3",
+        )
+        .bind(hp_regen)
+        .bind(max_hp)
+        .bind(huya.id)
+        .execute(pool)
+        .await?;
+        return Ok(true);
+    }
 
     if huya.actions_reset_at < today {
         sqlx::query(
@@ -99,6 +175,22 @@ pub async fn consume_action(pool: &PgPool, huya: &Huya) -> Result<bool, AppError
     }
 
     if huya.actions_left <= 0 {
+        // #region agent log
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("debug-749781.log")
+        {
+            use std::io::Write;
+            let payload = format!(
+                "{{\"sessionId\":\"749781\",\"runId\":\"pre-fix\",\"hypothesisId\":\"C\",\"location\":\"src/db/huya.rs:consume_action\",\"message\":\"consume_action_no_actions\",\"data\":{{\"huya_id\":{},\"actions_left\":{}}},\"timestamp\":{}}}\n",
+                huya.id,
+                huya.actions_left,
+                chrono::Utc::now().timestamp_millis()
+            );
+            let _ = f.write_all(payload.as_bytes());
+        }
+        // #endregion
         return Ok(false);
     }
 
@@ -314,16 +406,180 @@ pub async fn steal_attempt(
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────
 
-pub async fn top(pool: &PgPool, chat_id: i64, limit: i64) -> Result<Vec<(Huya, i64)>, AppError> {
+pub async fn top(pool: &PgPool, _chat_id: i64, limit: i64) -> Result<Vec<(Huya, i64)>, AppError> {
     let rows = sqlx::query_as::<_, Huya>(
-        &format!("SELECT {HUYA_SELECT} FROM huya WHERE chat_id = $1 ORDER BY length_mm DESC LIMIT $2"),
+        &format!("SELECT {HUYA_SELECT} FROM huya ORDER BY length_mm DESC LIMIT $1"),
     )
-    .bind(chat_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
 
     Ok(rows.into_iter().map(|h| { let id = h.tg_id; (h, id) }).collect())
+}
+
+// ── Inventory & equipment ─────────────────────────────────────────────────────
+
+fn ring_slots_for_length(length_mm: i32) -> i32 {
+    let len = length_mm.max(0);
+    match len {
+        0..=49 => 0,
+        50..=99 => 1,
+        100..=149 => 2,
+        150..=199 => 3,
+        200..=299 => 4,
+        300..=499 => 5,
+        _ => 6,
+    }
+}
+
+pub async fn get_inventory(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Vec<HuyaInventoryItem>, AppError> {
+    let items = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, acquired_at \
+         FROM huya_inventory WHERE chat_id = $1 AND tg_id = $2 \
+         ORDER BY acquired_at DESC, id DESC",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(items)
+}
+
+pub async fn get_equipment(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Vec<HuyaEquipmentSlot>, AppError> {
+    let rows = sqlx::query_as::<_, HuyaEquipmentSlot>(
+        "SELECT chat_id, tg_id, slot, inventory_id \
+         FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Grant a loot item to a player. Returns the created inventory row.
+pub async fn grant_loot(pool: &PgPool, chat_id: i64, tg_id: i64, item_id: &str) -> Result<HuyaInventoryItem, AppError> {
+    let row = sqlx::query_as::<_, HuyaInventoryItem>(
+        "INSERT INTO huya_inventory (chat_id, tg_id, item_id) \
+         VALUES ($1, $2, $3) \
+         RETURNING id, chat_id, tg_id, item_id, acquired_at",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(item_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Equip an inventory item into a slot. Returns true on success.
+pub async fn equip_item(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    slot: &str,
+    inventory_id: i32,
+) -> Result<bool, AppError> {
+    // Ensure item belongs to this player.
+    let owner = sqlx::query_scalar::<_, i64>(
+        "SELECT tg_id FROM huya_inventory WHERE id = $1 AND chat_id = $2",
+    )
+    .bind(inventory_id)
+    .bind(chat_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if owner != Some(tg_id) {
+        return Ok(false);
+    }
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2 AND slot = $3")
+        .bind(chat_id)
+        .bind(tg_id)
+        .bind(slot)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        "INSERT INTO huya_equipment (chat_id, tg_id, slot, inventory_id) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(slot)
+    .bind(inventory_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Unequip a slot. Returns true if something was unequipped.
+pub async fn unequip_item(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    slot: &str,
+) -> Result<bool, AppError> {
+    let res = sqlx::query(
+        "DELETE FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2 AND slot = $3",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(slot)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// When loser loses ring slots due to shrink, transfer one highest ring_X slot to winner.
+async fn drop_rings_on_shrink(
+    pool: &PgPool,
+    chat_id: i64,
+    winner_tg_id: i64,
+    loser_tg_id: i64,
+    loser_old_len: i32,
+    loser_new_len: i32,
+) -> Result<(), AppError> {
+    let old_slots = ring_slots_for_length(loser_old_len);
+    let new_slots = ring_slots_for_length(loser_new_len);
+    if new_slots >= old_slots {
+        return Ok(());
+    }
+
+    // Find highest-index ring_N that should fall.
+    for idx in (new_slots + 1..=old_slots).rev() {
+        let slot_name = format!("ring_{}", idx);
+        if let Some(inv_id) = sqlx::query_scalar::<_, i32>(
+            "SELECT inventory_id FROM huya_equipment \
+             WHERE chat_id = $1 AND tg_id = $2 AND slot = $3",
+        )
+        .bind(chat_id)
+        .bind(loser_tg_id)
+        .bind(&slot_name)
+        .fetch_optional(pool)
+        .await?
+        {
+            let mut tx = pool.begin().await?;
+            sqlx::query("DELETE FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2 AND slot = $3")
+                .bind(chat_id)
+                .bind(loser_tg_id)
+                .bind(&slot_name)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE huya_inventory SET tg_id = $1 WHERE id = $2 AND chat_id = $3")
+                .bind(winner_tg_id)
+                .bind(inv_id)
+                .bind(chat_id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            break;
+        }
+    }
+    Ok(())
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
@@ -696,11 +952,7 @@ pub async fn finalize_fight_result(
     let (ch, _) = get_or_create(pool, fight.chat_id, fight.challenger_tg_id).await?;
     let (tg, _) = get_or_create(pool, fight.chat_id, fight.target_tg_id).await?;
 
-    let (winner, loser) = if winner_tg_id == fight.challenger_tg_id {
-        (&ch, &tg)
-    } else {
-        (&tg, &ch)
-    };
+    let (winner, loser) = if winner_tg_id == fight.challenger_tg_id { (&ch, &tg) } else { (&tg, &ch) };
 
     let ch_len = ch.length_mm.max(1) as f64;
     let tg_len = tg.length_mm.max(1) as f64;
@@ -718,6 +970,7 @@ pub async fn finalize_fight_result(
         (s, e)
     };
 
+    let loser_old_len = loser.length_mm;
     let loser_new_len = loser.length_mm - steal_mm;
     let steal_actual = if loser.skill_fortress > 0 && loser_new_len < 10 {
         (loser.length_mm - 10).max(0)
@@ -735,6 +988,17 @@ pub async fn finalize_fight_result(
         sqlx::query("UPDATE huya SET length_mm = 10 WHERE id = $1 AND length_mm < 10")
             .bind(loser.id).execute(pool).await?;
     }
+
+    // Drop ring loot if loser lost available ring slots.
+    drop_rings_on_shrink(
+        pool,
+        fight.chat_id,
+        winner_tg_id,
+        loser_tg_id,
+        loser_old_len,
+        loser_new_len,
+    )
+    .await?;
 
     // Vampire: heal winner proportional to damage (use steal as proxy)
     let winner_max_hp = winner.max_hp();
