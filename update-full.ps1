@@ -5,7 +5,9 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$TelegramBotToken,
     [Parameter(Mandatory = $false)]
-    [string]$NotificationBotToken
+    [string]$NotificationBotToken,
+    [Parameter(Mandatory = $false)]
+    [string]$NotificationChatId
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,21 +20,44 @@ $ImageName    = "sublime-bot:latest"
 $ImageTar     = "sublime-bot.tar"
 $LocalBackups = "backups"
 
-# Resolve tokens (same as update.ps1)
+# Resolve tokens and notification chat (same as update.ps1)
 if (-not $TelegramBotToken -and $env:TELEGRAM_BOT_TOKEN) { $TelegramBotToken = $env:TELEGRAM_BOT_TOKEN }
 if (-not $NotificationBotToken -and $env:NOTIFICATION_BOT_TOKEN) { $NotificationBotToken = $env:NOTIFICATION_BOT_TOKEN }
+if (-not $NotificationChatId -and $env:NOTIFICATION_CHAT_ID) { $NotificationChatId = $env:NOTIFICATION_CHAT_ID }
 if (Test-Path "config.toml") {
     $config = Get-Content "config.toml" -Raw
     if (-not $TelegramBotToken -and $config -match 'telegram_token\s*=\s*"([^"]+)"') { $TelegramBotToken = $Matches[1] }
     if (-not $NotificationBotToken -and $config -match 'notification_bot_token\s*=\s*"([^"]+)"') { $NotificationBotToken = $Matches[1] }
+    if (-not $NotificationChatId -and $config -match 'notification_chat_id\s*=\s*"([^"]+)"') { $NotificationChatId = $Matches[1] }
 }
 if (-not $TelegramBotToken) {
     Write-Error "Set TelegramBotToken (param, env TELEGRAM_BOT_TOKEN, or config.toml)"
     exit 1
 }
 
+function Send-TelegramNotification {
+    param(
+        [string]$Text
+    )
+    try {
+        $botToken = if ($NotificationBotToken) { $NotificationBotToken } else { $TelegramBotToken }
+        if (-not $botToken -or -not $NotificationChatId) {
+            return
+        }
+        $body = @{
+            chat_id = $NotificationChatId
+            text    = $Text
+        }
+        Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Body $body -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        Write-Host "Warning: failed to send Telegram notification: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+}
+
 Write-Host "=== FULL UPDATE (backup -> update -> verify) ===" -ForegroundColor Green
 Write-Host ""
+
+Send-TelegramNotification "sublime: full update started at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 
 # --- 0. Copy scripts to server so backup/remote-update exist ---
 Write-Host "== 0. Sync scripts to server ==" -ForegroundColor Cyan
@@ -68,16 +93,24 @@ scp $SshOpts $ImageTar "${Target}:${RemoteDir}/"
 scp $SshOpts "docker-compose.deploy.yml" "${Target}:${RemoteDir}/"
 
 # Write .env.watchdog on server before deploy so watchdog profile can use it
-if ($NotificationBotToken) {
-    Write-Host "  Writing NOTIFICATION_BOT_TOKEN to .env.watchdog on server" -ForegroundColor DarkGray
-    $alertLine = ssh $SshOpts $Target "grep ALERT_CHAT_ID $RemoteDir/.env.watchdog 2>/dev/null || true"
-    $watchdogEnv = "export NOTIFICATION_BOT_TOKEN='$($NotificationBotToken -replace "'", "'\''")'"
-    if ($alertLine) { $watchdogEnv += "`n$alertLine" }
-    $tempFile = [System.IO.Path]::GetTempFileName()
-    [System.IO.File]::WriteAllText($tempFile, $watchdogEnv)
-    scp $SshOpts $tempFile "${Target}:${RemoteDir}/.env.watchdog"
-    ssh $SshOpts $Target "chmod 600 $RemoteDir/.env.watchdog"
-    Remove-Item $tempFile -ErrorAction SilentlyContinue
+if ($NotificationBotToken -or $NotificationChatId) {
+    Write-Host "  Updating .env.watchdog on server" -ForegroundColor DarkGray
+    $lines = @()
+    if ($NotificationBotToken) {
+        $escapedToken = $NotificationBotToken -replace "'", "'\''"
+        $lines += "export NOTIFICATION_BOT_TOKEN='$escapedToken'"
+    }
+    if ($NotificationChatId) {
+        $lines += "export ALERT_CHAT_ID='$NotificationChatId'"
+    }
+    if ($lines.Count -gt 0) {
+        $watchdogEnv = ($lines -join "`n") + "`n"
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        [System.IO.File]::WriteAllText($tempFile, $watchdogEnv)
+        scp $SshOpts $tempFile "${Target}:${RemoteDir}/.env.watchdog"
+        ssh $SshOpts $Target "chmod 600 $RemoteDir/.env.watchdog"
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
 }
 
 # --- 4. On server: load, up, migrate, commands, watchdog (if token set) ---
@@ -130,3 +163,5 @@ Write-Host "  $apiCheck" -ForegroundColor DarkGray
 
 Write-Host "`nFull update finished. Backup in $LocalBackups\" -ForegroundColor Green
 Write-Host "Check: ssh $Target 'docker ps'" -ForegroundColor DarkGray
+
+Send-TelegramNotification "sublime: full update finished successfully at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"

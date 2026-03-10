@@ -45,8 +45,6 @@ async fn start_postgres(
         telegram_token: "test_token".to_string(),
         database_url: database_url.clone(),
         sentry_dsn: None,
-        tiktok_cache_chat_id: None,
-        meme_ru_channels: vec![],
     };
     Ok((container, pool, config))
 }

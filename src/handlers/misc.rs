@@ -8,6 +8,7 @@ use crate::error::AppError;
 use crate::handlers::about;
 use crate::handlers::game::commands as game_commands;
 use crate::i18n::LOCALE;
+use crate::db::chat_topics;
 
 use rand::prelude::*;
 use std::sync::LazyLock;
@@ -515,5 +516,106 @@ pub async fn lang_handler(
     crate::db::game::set_chat_lang(&pool, msg.chat.id.0, &arg).await?;
     bot.send_message(msg.chat.id, format!("Язык чата изменён на: {arg}"))
         .await?;
+    Ok(())
+}
+
+pub async fn bothere_handler(
+    bot: Bot,
+    msg: Message,
+    _: crate::handlers::commands::Cmd,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    let chat = &msg.chat;
+    if !chat.is_supergroup() {
+        return Ok(());
+    }
+    let topic_id = match msg.thread_id {
+        Some(id) => i64::from(id.0.0),
+        None => {
+            bot.send_message(msg.chat.id, "This command must be used inside a topic.")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let from = match msg.from.as_ref() {
+        Some(u) => u,
+        None => return Ok(()),
+    };
+
+    if !game_commands::is_chat_admin(&bot, msg.chat.id, from.id.0 as u64).await {
+        bot.send_message(msg.chat.id, "Only chat administrators can enable the bot in a topic.")
+            .await?;
+        return Ok(());
+    }
+
+    let chat_id = msg.chat.id.0;
+    let current_count = chat_topics::count_enabled_topics(&pool, chat_id).await?;
+    if chat_topics::is_topic_enabled(&pool, chat_id, topic_id).await? {
+        bot.send_message(msg.chat.id, "The bot is already enabled in this topic.")
+            .await?;
+        return Ok(());
+    }
+    if current_count >= 3 {
+        bot.send_message(
+            msg.chat.id,
+            "Topic limit reached (3 per chat). Disable the bot in another topic first with /bothereoff.",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    chat_topics::add_topic(&pool, chat_id, topic_id).await?;
+    bot.send_message(
+        msg.chat.id,
+        "The bot is now enabled in this topic.",
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn bothereoff_handler(
+    bot: Bot,
+    msg: Message,
+    _: crate::handlers::commands::Cmd,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    let chat = &msg.chat;
+    if !chat.is_supergroup() {
+        return Ok(());
+    }
+    let topic_id = match msg.thread_id {
+        Some(id) => i64::from(id.0.0),
+        None => {
+            bot.send_message(msg.chat.id, "This command must be used inside a topic.")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let from = match msg.from.as_ref() {
+        Some(u) => u,
+        None => return Ok(()),
+    };
+
+    if !game_commands::is_chat_admin(&bot, msg.chat.id, from.id.0 as u64).await {
+        bot.send_message(msg.chat.id, "Only chat administrators can disable the bot in a topic.")
+            .await?;
+        return Ok(());
+    }
+
+    let chat_id = msg.chat.id.0;
+    if !chat_topics::is_topic_enabled(&pool, chat_id, topic_id).await? {
+        bot.send_message(msg.chat.id, "The bot is already disabled in this topic.")
+            .await?;
+        return Ok(());
+    }
+
+    chat_topics::remove_topic(&pool, chat_id, topic_id).await?;
+    bot.send_message(
+        msg.chat.id,
+        "The bot is now disabled in this topic.",
+    )
+    .await?;
     Ok(())
 }

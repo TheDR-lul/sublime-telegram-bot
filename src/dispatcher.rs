@@ -13,8 +13,9 @@ use crate::config::Config;
 use crate::error::AppError;
 use crate::handlers::{
     about, achievements as achievements_handler, commands::Cmd, game::commands as game,
-    game::duel as game_duel, huya as huya_handler, meme, misc, tiktok,
+    game::duel as game_duel, huya as huya_handler, meme, misc,
 };
+use crate::db::chat_topics;
 
 static PIDOR_YEAR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/pidor(\d{4})(?:@.+)?$").expect("pidor year regex is valid")
@@ -27,6 +28,46 @@ async fn check_rate_limit(
     let chat_id = msg.chat.id.0;
     let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
     rl.check(chat_id, user_id).await
+}
+
+async fn is_topic_allowed(pool: &PgPool, msg: &teloxide::types::Message) -> bool {
+    // Non-supergroups (private chats, basic groups) — always allowed.
+    if !msg.chat.is_supergroup() {
+        return true;
+    }
+
+    // Allow service commands everywhere so админы могут управлять ботом:
+    // - /menu        — админ-панель
+    // - /bothere*    — включение/выключение бота в топике
+    if let Some(text) = msg.text() {
+        let t = text.trim();
+        if t.starts_with("/menu")
+            || t.starts_with("/bothere")
+            || t.starts_with("/bothereoff")
+        {
+            return true;
+        }
+    }
+
+    // No thread id — treat as "no topic" (старые супергруппы без topics): не фильтруем.
+    let thread_id = match msg.thread_id {
+        Some(id) => i64::from(id.0.0),
+        None => return true,
+    };
+
+    let chat_id = msg.chat.id.0;
+    match chat_topics::is_topic_enabled(pool, chat_id, thread_id).await {
+        Ok(allowed) => allowed,
+        Err(err) => {
+            tracing::error!(
+                "Failed to check topic settings (chat_id={}, topic_id={}): {:?}",
+                chat_id,
+                thread_id,
+                err
+            );
+            false
+        }
+    }
 }
 
 async fn callback_router(
@@ -145,9 +186,6 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Pidorset => game::pidorset_handler(bot, msg, pool).await,
                         Cmd::Achievements => achievements_handler::achievements_handler(bot, msg, cmd, pool).await,
                         Cmd::Meme => meme::meme_handler(bot, msg, cmd).await,
-                        Cmd::Memeru => meme::memeru_handler(bot, msg, cmd, config).await,
-                        Cmd::Ttvideo(_) => tiktok::tt_video_handler(bot, msg, cmd).await,
-                        Cmd::Ttlink(_) => tiktok::tt_link_handler(bot, msg, cmd).await,
                         Cmd::Pidorduel => game_duel::pidorduel_handler(bot, msg, cmd, pool).await,
                         Cmd::Duelstats => game_duel::duelstats_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorbet(_) => game::pidorbet_handler(bot, msg, cmd, pool).await,
@@ -161,6 +199,8 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Huyaskills => huya_handler::huyaskills_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyashop => huya_handler::huyashop_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyapet(_) => huya_handler::huyapet_handler(bot, msg, cmd, pool).await,
+                        Cmd::Bothere => misc::bothere_handler(bot, msg, cmd, pool).await,
+                        Cmd::Bothereoff => misc::bothereoff_handler(bot, msg, cmd, pool).await,
                     }
                 }
                 UpdateKind::CallbackQuery(query) => callback_router(bot, query, pool, config).await,
@@ -172,6 +212,7 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
 
 fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     Update::filter_message()
+        .filter_async(|msg: Message, pool: PgPool| async move { is_topic_allowed(&pool, &msg).await })
         .filter_command::<Cmd>()
         .branch(case![Cmd::Menu].endpoint(misc::menu_handler))
         .branch(case![Cmd::About].endpoint(about::about_handler))
@@ -279,19 +320,7 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                 meme::meme_handler(bot, msg, cmd).await
             },
         ))
-        .branch(case![Cmd::Memeru].endpoint(
-            |bot: Bot,
-             msg: Message,
-             _cmd: Cmd,
-             config: Config,
-             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
-                if !check_rate_limit(&rl, &msg).await {
-                    return Ok(());
-                }
-                meme::memeru_handler(bot, msg, _cmd, config).await
-            },
-        ))
-        .branch(case![Cmd::Ttvideo(_s)].endpoint(
+        .branch(case![Cmd::Meme].endpoint(
             |bot: Bot,
              msg: Message,
              cmd: Cmd,
@@ -299,20 +328,15 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                 if !check_rate_limit(&rl, &msg).await {
                     return Ok(());
                 }
-                tiktok::tt_video_handler(bot, msg, cmd).await
+                meme::meme_handler(bot, msg, cmd).await
             },
         ))
-        .branch(case![Cmd::Ttlink(_s)].endpoint(
-            |bot: Bot,
-             msg: Message,
-             cmd: Cmd,
-             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
-                if !check_rate_limit(&rl, &msg).await {
-                    return Ok(());
-                }
-                tiktok::tt_link_handler(bot, msg, cmd).await
-            },
-        ))
+        .branch(case![Cmd::Bothere].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            misc::bothere_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Bothereoff].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            misc::bothereoff_handler(bot, msg, cmd, pool).await
+        }))
         .branch(dptree::endpoint(|bot: Bot, msg: Message, pool: PgPool| async move {
             use crate::handlers::game::commands;
             if let Some(text) = msg.text()
@@ -342,15 +366,10 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
             Ok(())
         });
 
-    let inline_schema = Update::filter_inline_query().branch(
-        dptree::endpoint(|bot: Bot, query: InlineQuery, pool: PgPool, config: Config| async move {
-            if query.query.trim().starts_with("http") {
-                tiktok::tt_inline_handler(bot, query, pool, config).await
-            } else {
-                misc::inline_handler(bot, query).await
-            }
-        }),
-    );
+    let inline_schema = Update::filter_inline_query()
+        .branch(dptree::endpoint(|bot: Bot, query: InlineQuery| async move {
+            misc::inline_handler(bot, query).await
+        }));
 
     let chat_member_schema = Update::filter_chat_member().branch(
         dptree::endpoint(

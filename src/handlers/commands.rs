@@ -33,12 +33,6 @@ pub enum Cmd {
     Pidorme,
     #[command(description = "get some random meme")]
     Meme,
-    #[command(description = "get some random russian meme")]
-    Memeru,
-    #[command(description = "get video from tiktok")]
-    Ttvideo(String),
-    #[command(description = "get depersonalized tiktok link")]
-    Ttlink(String),
     #[command(description = "show your achievements")]
     Achievements,
     #[command(description = "scan someone with pidor-detector")]
@@ -73,6 +67,10 @@ pub enum Cmd {
     Huyashop,
     #[command(description = "tamagotchi dick game status")]
     Huya(String),
+    #[command(description = "enable bot in this topic (admins only, forums)")]
+    Bothere,
+    #[command(description = "disable bot in this topic (admins only, forums)")]
+    Bothereoff,
     // RPG: development for future — disabled for now; /rpg shows stub message.
     #[command(description = "Pidor-Royale RPG (in development)")]
     Rpg,

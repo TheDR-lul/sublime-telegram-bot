@@ -34,8 +34,6 @@ async fn rpg_command_first_time_sends_menu_and_creates_character() {
         telegram_token: "test_token".to_string(),
         database_url: database_url.clone(),
         sentry_dsn: None,
-        tiktok_cache_chat_id: None,
-        meme_ru_channels: vec![],
     };
 
     bot.dependencies(dptree::deps![pool.clone(), config]);

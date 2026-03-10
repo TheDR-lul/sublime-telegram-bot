@@ -2,4 +2,6 @@
 telegram_token = "YOUR_BOT_TOKEN"
 # Optional: token for notification/watchdog bot (alerts and success messages)
 notification_bot_token = "YOUR_NOTIFICATION_BOT_TOKEN"
+# Optional: chat ID for deploy/update and watchdog notifications (e.g. -1001234567890)
+notification_chat_id = "-1001234567890"
 database_url = "postgresql://postgres:postgres@localhost:5432/sublime_bot"

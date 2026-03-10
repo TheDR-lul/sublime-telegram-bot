@@ -130,8 +130,6 @@ fn run_config(cmd: ConfigCmd, config_path: Option<std::path::PathBuf>) -> Result
                 telegram_token: token.trim().to_string(),
                 database_url: database_url.trim().to_string(),
                 sentry_dsn: None,
-                tiktok_cache_chat_id: None,
-                meme_ru_channels: vec![],
             };
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -155,7 +153,6 @@ fn run_config(cmd: ConfigCmd, config_path: Option<std::path::PathBuf>) -> Result
                 "telegram_token" => cfg.telegram_token = value,
                 "database_url" => cfg.database_url = value,
                 "sentry_dsn" => cfg.sentry_dsn = if value.is_empty() { None } else { Some(value) },
-                "tiktok_cache_chat_id" => cfg.tiktok_cache_chat_id = value.parse().ok(),
                 _ => return Err(AppError::Config(format!("Unknown key: {}", key))),
             }
             let toml = toml::to_string_pretty(&cfg).map_err(|e| AppError::Config(e.to_string()))?;
@@ -170,7 +167,6 @@ fn run_config(cmd: ConfigCmd, config_path: Option<std::path::PathBuf>) -> Result
             println!("telegram_token: {}...", mask(&cfg.telegram_token));
             println!("database_url: {}...", mask(&cfg.database_url));
             println!("sentry_dsn: {:?}", cfg.sentry_dsn.as_ref().map(|s| mask(s)));
-            println!("tiktok_cache_chat_id: {:?}", cfg.tiktok_cache_chat_id);
         }
         ConfigCmd::Path => {
             let path = Config::config_path()
@@ -229,9 +225,6 @@ async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(),
         BotCommand::new("pidorset", "autorun settings (admins only)"),
         BotCommand::new("lang", "set chat language (admins only), e.g. /lang ru"),
         BotCommand::new("meme", "get some random meme"),
-        BotCommand::new("memeru", "get some random russian meme"),
-        BotCommand::new("ttvideo", "get video from tiktok"),
-        BotCommand::new("ttlink", "get depersonalized tiktok link"),
         BotCommand::new("achievements", "show your achievements"),
         BotCommand::new("pidorscan", "scan someone with pidor-detector"),
         BotCommand::new("huya", "dick tamagotchi: status"),
@@ -375,8 +368,15 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
         let running = tokio::task::spawn_blocking(move || check_container_running(&container))
             .await
             .unwrap_or(false);
-        let status = if running { "Бот работает." } else { "Бот не запущен." };
-        bot.send_message(msg.chat.id, status).await?;
+        let status_line = if running {
+            "Контейнер sublime-bot: запущен."
+        } else {
+            "Контейнер sublime-bot: не запущен."
+        };
+        let note =
+            "Это проверка только контейнера. Если бот не отвечает в чатах, проверяйте логи и /commands.";
+        let text = format!("{}\n{}", status_line, note);
+        bot.send_message(msg.chat.id, text).await?;
         Ok(())
     }
 

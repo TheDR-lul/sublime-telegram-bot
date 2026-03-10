@@ -24,8 +24,6 @@ async fn setup_pool_and_config() -> (sqlx::PgPool, Config) {
         telegram_token: "test_token".to_string(),
         database_url: database_url.clone(),
         sentry_dsn: None,
-        tiktok_cache_chat_id: None,
-        meme_ru_channels: vec![],
     };
     (pool, config)
 }

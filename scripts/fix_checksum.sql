@@ -15,3 +15,7 @@ WHERE version = 20260304000006;
 UPDATE _sqlx_migrations
 SET checksum = decode('feddce85eabcb8ae5763b1a550a4dd9bfbbd225242e560de2f522a7616841af883dd0ceb89dfbfa155e1cdf21d256544', 'hex')
 WHERE version = 20260305000007;
+
+-- Fix VersionMismatch for 20260310000008_chat_topics.sql.
+-- Simplest fix: delete the old row so sqlx inserts a fresh one with correct checksum on next migrate.
+DELETE FROM _sqlx_migrations WHERE version = 20260310000008;

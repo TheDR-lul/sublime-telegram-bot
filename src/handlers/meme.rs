@@ -7,13 +7,10 @@ use teloxide::types::{
     MaybeInaccessibleMessage,
 };
 
-use crate::config::Config;
 use crate::error::AppError;
 
 const MEME_REFRESH: &str = "meme_en_refresh";
 const MEME_SAVE: &str = "meme_en_save";
-const MEMERU_REFRESH: &str = "meme_ru_refresh";
-const MEMERU_SAVE: &str = "meme_ru_save";
 
 fn generate_keyboard(link: &str, save_text: &str, refresh_text: &str) -> Result<InlineKeyboardMarkup, AppError> {
     let url = url::Url::parse(link)?;
@@ -51,19 +48,6 @@ async fn get_random_en_meme() -> Result<(String, String), AppError> {
     Ok((meme_link.clone(), meme_link))
 }
 
-fn get_random_ru_meme(config: &Config) -> String {
-    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
-    if config.meme_ru_channels.is_empty() {
-        return "https://t.me/beobanka/1000".to_string();
-    }
-    let channel = config
-        .meme_ru_channels
-        .choose(&mut rng)
-        .expect("meme_ru_channels non-empty after is_empty check");
-    let meme_id = rng.random_range(channel.start_id..=channel.end_id);
-    format!("{}/{}", channel.url, meme_id)
-}
-
 pub async fn meme_handler(
     bot: Bot,
     msg: Message,
@@ -78,28 +62,6 @@ pub async fn meme_handler(
         }
         Err(e) => {
             tracing::warn!("Failed to get meme: {:?}", e);
-            bot.send_message(msg.chat.id, crate::i18n::LOCALE.t("ru", "meme.error_generic")).await?;
-        }
-    }
-    Ok(())
-}
-
-pub async fn memeru_handler(
-    bot: Bot,
-    msg: Message,
-    _: crate::handlers::commands::Cmd,
-    config: Config,
-) -> Result<(), AppError> {
-    let meme_link = get_random_ru_meme(&config);
-    let url = url::Url::parse(&meme_link)?;
-    match bot
-        .send_photo(msg.chat.id, teloxide::types::InputFile::url(url))
-        .reply_markup(generate_keyboard(&meme_link, MEMERU_SAVE, MEMERU_REFRESH)?)
-        .await
-    {
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!("Failed to send RU meme {}: {:?}", meme_link, e);
             bot.send_message(msg.chat.id, crate::i18n::LOCALE.t("ru", "meme.error_generic")).await?;
         }
     }
@@ -194,100 +156,30 @@ pub async fn meme_save_callback(
     Ok(())
 }
 
-pub async fn memeru_refresh_callback(
-    bot: Bot,
-    query: CallbackQuery,
-    config: Config,
+pub async fn memeru_handler(
+    _bot: Bot,
+    _msg: Message,
+    _: crate::handlers::commands::Cmd,
+    _config: crate::config::Config,
 ) -> Result<(), AppError> {
-    let meme_link = get_random_ru_meme(&config);
-    if let Some(msg) = &query.message {
-        let chat_id = msg.chat().id;
-        let message_id = msg.id();
-        let url = url::Url::parse(&meme_link)?;
-        match bot
-            .edit_message_media(
-                chat_id,
-                message_id,
-                teloxide::types::InputMedia::Photo(teloxide::types::InputMediaPhoto::new(
-                    teloxide::types::InputFile::url(url),
-                )),
-            )
-            .reply_markup(generate_keyboard(&meme_link, MEMERU_SAVE, MEMERU_REFRESH)?)
-            .await
-        {
-            Ok(_) => {
-                bot.answer_callback_query(query.id.clone()).await?;
-            }
-            Err(e) => {
-                tracing::warn!("Failed to edit memeru media: {:?}", e);
-                bot.answer_callback_query(query.id.clone())
-                    .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
-                    .await?;
-            }
-        }
-    }
+    // Russian meme logic removed.
+    Ok(())
+}
+
+pub async fn memeru_refresh_callback(
+    _bot: Bot,
+    _query: CallbackQuery,
+    _config: crate::config::Config,
+) -> Result<(), AppError> {
+    // Russian meme logic removed.
     Ok(())
 }
 
 pub async fn memeru_save_callback(
-    bot: Bot,
-    query: CallbackQuery,
-    config: Config,
+    _bot: Bot,
+    _query: CallbackQuery,
+    _config: crate::config::Config,
 ) -> Result<(), AppError> {
-    if let Some(MaybeInaccessibleMessage::Regular(msg)) = &query.message {
-        let msg = msg.as_ref();
-        if let Some(markup) = msg.reply_markup()
-            && let Some(row) = markup.inline_keyboard.first()
-            && let Some(btn) = row.first()
-        {
-            let old_url = match &btn.kind {
-                teloxide::types::InlineKeyboardButtonKind::Url(u) => Some(u.as_str()),
-                _ => None,
-            };
-            if let Some(old_url) = old_url {
-                let new_meme_link = get_random_ru_meme(&config);
-                        let old_url_parsed = url::Url::parse(old_url)?;
-                        match bot
-                            .edit_message_reply_markup(msg.chat.id, msg.id)
-                            .reply_markup(InlineKeyboardMarkup::new(vec![vec![
-                                InlineKeyboardButton::url("🔗".to_string(), old_url_parsed),
-                            ]]))
-                            .await
-                        {
-                            Ok(_) => {
-                                let url = url::Url::parse(&new_meme_link)?;
-                                match bot
-                                    .send_photo(
-                                        msg.chat.id,
-                                        teloxide::types::InputFile::url(url),
-                                    )
-                                    .reply_markup(generate_keyboard(
-                                        &new_meme_link,
-                                        MEMERU_SAVE,
-                                        MEMERU_REFRESH,
-                                    )?)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        bot.answer_callback_query(query.id.clone()).await?;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Failed to send memeru: {:?}", e);
-                                        bot.answer_callback_query(query.id.clone())
-                                            .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
-                                            .await?;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to edit markup: {:?}", e);
-                                bot.answer_callback_query(query.id.clone())
-                                    .text(crate::i18n::LOCALE.t("ru", "meme.error_retry"))
-                                    .await?;
-                            }
-                        }
-            }
-        }
-    }
+    // Russian meme logic removed.
     Ok(())
 }

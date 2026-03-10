@@ -9,17 +9,7 @@ pub struct Config {
     pub database_url: String,
     #[serde(default)]
     pub sentry_dsn: Option<String>,
-    #[serde(default)]
-    pub tiktok_cache_chat_id: Option<i64>,
-    #[serde(default)]
-    pub meme_ru_channels: Vec<MemeRuChannel>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemeRuChannel {
-    pub url: String,
-    pub start_id: i32,
-    pub end_id: i32,
+    // Keep space for future config fields; currently no extra options needed here.
 }
 
 impl Config {
@@ -31,7 +21,7 @@ impl Config {
             std::env::var("TELEGRAM_BOT_API_SECRET").or_else(|_| std::env::var("TELOXIDE_TOKEN")),
             std::env::var("DATABASE_URL"),
             std::env::var("SENTRY_DSN").ok(),
-            std::env::var("TIKTOK_CACHE_CHAT_ID").ok().and_then(|s| s.parse().ok()),
+            (),
         );
 
         let path = config_path
@@ -49,14 +39,12 @@ impl Config {
             });
 
         if cfg.is_none() {
-            let (token, db, sentry, tiktok_chat) = &from_env;
+            let (token, db, sentry, _dummy) = &from_env;
             if let (Ok(t), Ok(d)) = (token, db) {
                 cfg = Some(Config {
                     telegram_token: t.clone(),
                     database_url: d.clone(),
                     sentry_dsn: sentry.clone(),
-                    tiktok_cache_chat_id: *tiktok_chat,
-                    meme_ru_channels: vec![],
                 });
             }
         }
@@ -75,11 +63,6 @@ impl Config {
         }
         if let Ok(s) = std::env::var("SENTRY_DSN") {
             c.sentry_dsn = Some(s);
-        }
-        if let Ok(id) = std::env::var("TIKTOK_CACHE_CHAT_ID")
-            && let Ok(n) = id.parse()
-        {
-            c.tiktok_cache_chat_id = Some(n);
         }
 
         Ok(c)
