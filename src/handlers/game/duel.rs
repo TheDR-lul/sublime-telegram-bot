@@ -12,6 +12,7 @@ use crate::db::duel as duel_db;
 use crate::db::models::DuelGame;
 use crate::error::AppError;
 use crate::i18n::LOCALE;
+use crate::telegram::target_resolver::{resolve_target as resolve_target_global, ResolvedTarget};
 
 fn name_from_tg_user(u: &teloxide::types::User) -> String {
     u.username
@@ -98,11 +99,14 @@ pub async fn pidorduel_handler(
     let challenger_tg_id = from.id.0 as i64;
     let challenger_name = escape_html(&name_from_tg_user(from));
 
-    let invited_tg_id = msg
-        .reply_to_message()
-        .as_ref()
-        .and_then(|r| r.from.as_ref())
-        .map(|u| u.id.0 as i64);
+    let invited_tg_id = match resolve_target_global(&pool, &msg, "").await {
+        ResolvedTarget::User(id) => Some(id),
+        _ => msg
+            .reply_to_message()
+            .as_ref()
+            .and_then(|r| r.from.as_ref())
+            .map(|u| u.id.0 as i64),
+    };
     if let Some(inv_id) = invited_tg_id {
         if inv_id == challenger_tg_id {
             bot.send_message(msg.chat.id, LOCALE.t("ru", "duel.static.challenge_self"))

@@ -242,6 +242,7 @@ async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(),
         BotCommand::new("huyatop", "dick leaderboard"),
         BotCommand::new("huyaskills", "skill tree for your dick"),
         BotCommand::new("huyashop", "shop: items & boosters for length"),
+        BotCommand::new("huyapet", "pet a friend's dick (@user or reply)"),
     ];
     let bot = teloxide::Bot::new(&cfg.telegram_token);
     // Set same commands for default (fallback), all private chats, and all group/supergroup chats.

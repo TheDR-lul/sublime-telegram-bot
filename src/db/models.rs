@@ -210,6 +210,9 @@ pub struct Huya {
     pub atk_boost:  i32,
     pub def_boost:  i32,
     pub grow_boost: i32,
+    // Pet energy (for /huyapet friend petting)
+    pub pet_energy_left: i32,
+    pub pet_energy_reset_at: NaiveDate,
 }
 
 impl Huya {

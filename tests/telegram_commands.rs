@@ -38,6 +38,13 @@ fn test_user() -> teloxide::types::User {
         .build()
 }
 
+fn test_user_no_username() -> teloxide::types::User {
+    MockUser::new()
+        .id(90_002)
+        .first_name("NoUsername")
+        .build()
+}
+
 fn test_chat() -> teloxide::types::Chat {
     MockPrivateChat::new().id(90_001).build()
 }
@@ -91,6 +98,31 @@ async fn command_shrug_sends_shrug() {
     let last = r.sent_messages.last().expect("one message");
     let text = last.text().expect("text");
     assert!(text.contains("ツ"), "got: {}", text);
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL and running Postgres"]
+async fn command_huya_works_without_username() {
+    let (pool, config) = setup_pool_and_config().await;
+    let msg = MockMessageText::new()
+        .text("/huya")
+        .from(test_user_no_username())
+        .chat(test_chat());
+    let mut bot = MockBot::new(msg, dispatcher::build_test_schema());
+    bot.dependencies(dptree::deps![
+        pool,
+        config,
+        std::sync::Arc::new(dedup::PidorscanDedup::new(2))
+    ]);
+    bot.dispatch().await;
+    let r = bot.get_responses();
+    let last = r.sent_messages.last().expect("one message");
+    let text = last.text().expect("text");
+    assert!(
+        text.contains("Huya") || text.contains("хуя") || text.contains("Level"),
+        "got: {}",
+        text
+    );
 }
 
 #[tokio::test]

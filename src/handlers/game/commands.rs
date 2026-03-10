@@ -330,35 +330,19 @@ pub async fn pidorbet_handler(
 }
 
 /// Extract bet target tg_id from the command.
-/// Priority: TextMention entity > @username in arg > reply-to message.
+/// Priority is delegated to the shared target resolver.
 async fn extract_bet_target(msg: &Message, cmd: &crate::handlers::commands::Cmd, pool: &PgPool) -> Option<i64> {
     if let crate::handlers::commands::Cmd::Pidorbet(arg) = cmd {
-        let arg = arg.trim();
-        if !arg.is_empty() {
-            // TextMention: user without @username (tapped from contact list)
-            if let Some(entities) = msg.entities() {
-                for e in entities {
-                    if let teloxide::types::MessageEntityKind::TextMention { user } = &e.kind {
-                        return Some(user.id.0 as i64);
-                    }
-                }
-            }
-            // @username mention — look up in DB by username
-            let username = arg.trim_start_matches('@');
-            if !username.is_empty() {
-                if let Ok(Some(u)) = user::get_by_username(pool, username).await {
-                    return Some(u.tg_id);
-                }
-            }
+        let arg_str = arg.as_str();
+        let resolved = crate::telegram::target_resolver::resolve_target(pool, msg, arg_str).await;
+        match resolved {
+            crate::telegram::target_resolver::ResolvedTarget::User(id) => Some(id),
+            crate::telegram::target_resolver::ResolvedTarget::IsBot => None,
+            crate::telegram::target_resolver::ResolvedTarget::NotFound => None,
         }
+    } else {
+        None
     }
-    // Fallback: reply-to message
-    if let Some(reply) = msg.reply_to_message() {
-        if let Some(ref from) = reply.from {
-            return Some(from.id.0 as i64);
-        }
-    }
-    None
 }
 
 fn slot_str(slot: PidorAutorunSlot) -> &'static str {

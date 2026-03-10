@@ -5,13 +5,16 @@
 use sqlx::{self, PgPool};
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup};
+use std::io::Write;
 use teloxide::utils::html::escape as escape_html;
+use std::time::Duration;
 
 use crate::db::huya as huya_db;
 use crate::db::models::Huya;
 use crate::db::user;
 use crate::error::AppError;
 use crate::i18n::LOCALE;
+use crate::telegram::target_resolver::{resolve_target as resolve_target_global, ResolvedTarget};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -88,8 +91,9 @@ fn huya_status_text(h: &Huya, name: &str, equ: &[crate::db::models::HuyaEquipmen
             ("hp_bar",       &h.hp_bar()),
         ])
     };
+    let pet_line = format!("🖐 Поглаживания друзей: {}/3", h.pet_energy_left.max(0).min(3));
     let eq_text = equipment_summary(equ, inv);
-    format!("{}\n\n{}\n\n{}", base, LOCALE.t("ru", "huya.equipment_header"), eq_text)
+    format!("{}\n{}\n\n{}\n\n{}", base, pet_line, LOCALE.t("ru", "huya.equipment_header"), eq_text)
 }
 
 fn huya_stat_keyboard(tg_id: i64, has_actions: bool) -> InlineKeyboardMarkup {
@@ -101,6 +105,19 @@ fn huya_stat_keyboard(tg_id: i64, has_actions: bool) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::callback(btn, format!("huya_grow:{}", tg_id)),
     ]])
+}
+
+/// Preferred display name for a Telegram user: @username if present, otherwise "first last" or first name.
+fn display_name_from_user(user: &teloxide::types::User) -> String {
+    user.username
+        .as_ref()
+        .map(|u| format!("@{}", u))
+        .unwrap_or_else(|| {
+            user.last_name
+                .as_ref()
+                .map(|l| format!("{} {}", user.first_name, l))
+                .unwrap_or_else(|| user.first_name.clone())
+        })
 }
 
 fn actions_available(h: &Huya) -> bool {
@@ -151,35 +168,54 @@ fn fight_pick_keyboard(fight_id: i32) -> InlineKeyboardMarkup {
     ]])
 }
 
+// #region agent log
+fn agent_debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug-3e7364.log")
+    {
+        let payload = serde_json::json!({
+            "sessionId": "3e7364",
+            "runId": "pre-fix",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+        });
+        let _ = writeln!(file, "{}", payload.to_string());
+    }
+}
+// #endregion
+
+// #region agent log 6f3178
+fn agent_debug_log_6f3178(
+    hypothesis_id: &str,
+    location: &str,
+    message: &str,
+    data: serde_json::Value,
+) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug-6f3178.log")
+    {
+        let payload = serde_json::json!({
+            "sessionId": "6f3178",
+            "runId": "pre-fix",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+        });
+        let _ = writeln!(file, "{}", payload.to_string());
+    }
+}
+// #endregion
+
 // ── Target resolution ─────────────────────────────────────────────────────────
-
-enum TargetResult {
-    User(i64),
-    IsBot,
-    NotFound,
-}
-
-async fn resolve_target(msg: &Message, pool: &PgPool, sub_arg: &str) -> TargetResult {
-    if let Some(entities) = msg.entities() {
-        for e in entities {
-            if let teloxide::types::MessageEntityKind::TextMention { user } = &e.kind {
-                return if user.is_bot { TargetResult::IsBot } else { TargetResult::User(user.id.0 as i64) };
-            }
-        }
-    }
-    let username = sub_arg.trim_start_matches('@');
-    if !username.is_empty() {
-        if let Ok(Some(u)) = user::get_by_username(pool, username).await {
-            return TargetResult::User(u.tg_id);
-        }
-    }
-    if let Some(reply) = msg.reply_to_message() {
-        if let Some(ref from) = reply.from {
-            return if from.is_bot { TargetResult::IsBot } else { TargetResult::User(from.id.0 as i64) };
-        }
-    }
-    TargetResult::NotFound
-}
 
 // ── Main dispatcher ───────────────────────────────────────────────────────────
 
@@ -195,9 +231,7 @@ pub async fn huya_handler(
     let chat_id = msg.chat.id.0;
     let from = match msg.from.as_ref() { Some(f) => f, None => return Ok(()) };
     let tg_id = from.id.0 as i64;
-    let name = from.username.as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| from.first_name.clone());
+    let name = display_name_from_user(from);
 
     user::upsert_tg_user(&pool, from).await?;
 
@@ -221,6 +255,7 @@ pub async fn huya_handler(
                 "grow"  => handle_grow(&bot, &pool, msg.chat.id, chat_id, tg_id, &name).await,
                 "fight" => handle_fight(&bot, &pool, &msg, chat_id, tg_id, &name, arg).await,
                 "steal" => handle_steal(&bot, &pool, &msg, chat_id, tg_id, &name, arg).await,
+                "pet"   => handle_pet_friend(&bot, &pool, &msg, chat_id, from, &name, arg).await,
                 _       => handle_stat(&bot, &pool, msg.chat.id, chat_id, tg_id, &name).await,
             }
         }
@@ -322,9 +357,7 @@ pub async fn huya_grow_callback(
     let chat_id = msg_ref.chat().id;
 
     let from = &query.from;
-    let name = from.username.as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| from.first_name.clone());
+    let name = display_name_from_user(from);
 
     let (h, _) = huya_db::get_or_create(&pool, chat_id.0, clicker).await?;
 
@@ -375,15 +408,15 @@ async fn handle_fight(
 ) -> Result<(), AppError> {
     let chat_id = msg.chat.id;
 
-    let target_tg_id = match resolve_target(msg, pool, sub_arg).await {
-        TargetResult::User(id) => id,
-        TargetResult::IsBot => {
+    let target_tg_id = match resolve_target_global(pool, msg, sub_arg).await {
+        ResolvedTarget::User(id) => id,
+        ResolvedTarget::IsBot => {
             bot.send_message(chat_id, LOCALE.t("ru", "huya.fight_self_bot"))
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
             return Ok(());
         }
-        TargetResult::NotFound => {
+        ResolvedTarget::NotFound => {
             bot.send_message(chat_id, LOCALE.t("ru", "huya.fight_no_target")).await?;
             return Ok(());
         }
@@ -523,9 +556,7 @@ pub async fn huya_fight_decline_callback(
     let _ = sqlx::query("UPDATE huya SET actions_left = LEAST(actions_left + 1, $1) WHERE id = $2")
         .bind(4_i32).bind(ch_huya.id).execute(&pool).await;
 
-    let decliner = query.from.username.as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| query.from.first_name.clone());
+    let decliner = display_name_from_user(&query.from);
 
     let text = LOCALE.t_fmt("ru", "huya.fight_declined", &[("name", &escape_html(&decliner))]);
 
@@ -609,9 +640,7 @@ pub async fn huya_fight_move_callback(
 
     // One player picked — waiting for the other.
     if updated.challenger_pick.is_none() || updated.target_pick.is_none() {
-        let picker_name = query.from.username.as_ref()
-            .map(|u| format!("@{}", u))
-            .unwrap_or_else(|| query.from.first_name.clone());
+        let picker_name = display_name_from_user(&query.from);
 
         let wait_text = format!(
             "{}\n\n{}",
@@ -743,15 +772,15 @@ async fn handle_steal(
 ) -> Result<(), AppError> {
     let chat_id = msg.chat.id;
 
-    let target_tg_id = match resolve_target(msg, pool, sub_arg).await {
-        TargetResult::User(id) => id,
-        TargetResult::IsBot => {
+    let target_tg_id = match resolve_target_global(pool, msg, sub_arg).await {
+        ResolvedTarget::User(id) => id,
+        ResolvedTarget::IsBot => {
             bot.send_message(chat_id, LOCALE.t("ru", "huya.steal_self_bot"))
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
             return Ok(());
         }
-        TargetResult::NotFound => {
+        ResolvedTarget::NotFound => {
             bot.send_message(chat_id, LOCALE.t("ru", "huya.steal_no_target")).await?;
             return Ok(());
         }
@@ -805,6 +834,166 @@ async fn handle_steal(
     Ok(())
 }
 
+// ── Pet friend (/huyapet, /huya pet) ───────────────────────────────────────────
+
+async fn handle_pet_friend(
+    bot: &Bot,
+    pool: &PgPool,
+    msg: &Message,
+    chat_id_raw: i64,
+    from: &teloxide::types::User,
+    from_name: &str,
+    target_arg: &str,
+) -> Result<(), AppError> {
+    let chat_id = msg.chat.id;
+    let from_tg_id = from.id.0 as i64;
+
+    let target_tg_id = match resolve_target_global(pool, msg, target_arg.trim()).await {
+        ResolvedTarget::User(id) => id,
+        ResolvedTarget::IsBot => {
+            bot.send_message(chat_id, LOCALE.t("ru", "huya.pet_bot"))
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+            return Ok(());
+        }
+        ResolvedTarget::NotFound => {
+            bot.send_message(chat_id, LOCALE.t("ru", "huya.pet_no_target"))
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    if target_tg_id == from_tg_id {
+        bot.send_message(
+            chat_id,
+            LOCALE.t_fmt("ru", "huya.pet_self", &[("name", &escape_html(from_name))]),
+        )
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .await?;
+        return Ok(());
+    }
+
+    let result = huya_db::pet_friend(pool, chat_id_raw, from_tg_id, target_tg_id).await?;
+
+    use huya_db::PetFriendState;
+    match result.state {
+        PetFriendState::TargetIsAss => {
+            let target_name = user::get_by_tg_id(pool, target_tg_id)
+                .await?
+                .map(|u| u.full_username(true))
+                .unwrap_or_else(|| "???".to_string());
+            bot.send_message(
+                chat_id,
+                LOCALE.t_fmt(
+                    "ru",
+                    "huya.pet_ass",
+                    &[("target", &escape_html(&target_name))],
+                ),
+            )
+            .parse_mode(teloxide::types::ParseMode::Html)
+            .await?;
+        }
+        PetFriendState::TooManyFriends => {
+            bot.send_message(chat_id, LOCALE.t("ru", "huya.pet_too_many_friends"))
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+        }
+        PetFriendState::NoEnergy => {
+            bot.send_message(chat_id, LOCALE.t("ru", "huya.pet_no_energy"))
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+        }
+        PetFriendState::Ok => {
+            let target_name = user::get_by_tg_id(pool, target_tg_id)
+                .await?
+                .map(|u| u.full_username(true))
+                .unwrap_or_else(|| "???".to_string());
+
+            let stage1 = LOCALE.t_fmt(
+                "ru",
+                "huya.pet_friend_stage1",
+                &[
+                    ("attacker", &escape_html(from_name)),
+                    ("target", &escape_html(&target_name)),
+                ],
+            );
+            let stage2 = LOCALE.t("ru", "huya.pet_friend_stage2");
+            let stage3 = LOCALE.t("ru", "huya.pet_friend_stage3");
+
+            let text = LOCALE.t_fmt(
+                "ru",
+                "huya.pet_friend_result",
+                &[
+                    ("stage1", &stage1),
+                    ("stage2", &stage2),
+                    ("stage3", &stage3),
+                    ("heal", &result.heal.to_string()),
+                    ("xp", &result.xp_gain.to_string()),
+                    ("target_hp", &result.target.hp.to_string()),
+                    ("target_max_hp", &result.target.max_hp().to_string()),
+                    ("energy_left", &result.from.pet_energy_left.to_string()),
+                ],
+            );
+
+            bot.send_message(chat_id, format!("🖐 {}", stage1))
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            bot.send_message(chat_id, stage2)
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            bot.send_message(chat_id, text)
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn huyapet_handler(
+    bot: Bot,
+    msg: Message,
+    cmd: crate::handlers::commands::Cmd,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
+    let chat_id_raw = msg.chat.id.0;
+    let from = match msg.from.as_ref() {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+    let from_name = display_name_from_user(from);
+
+    user::upsert_tg_user(&pool, from).await?;
+
+    let arg = match cmd {
+        crate::handlers::commands::Cmd::Huyapet(ref s) => s.as_str(),
+        _ => "",
+    };
+
+    agent_debug_log_6f3178(
+        "H-pet-1",
+        "huya.rs:huyapet_handler",
+        "enter_huyapet_handler",
+        serde_json::json!({
+            "raw_text": msg.text(),
+            "from_tg_id": from.id.0 as i64,
+            "chat_id": chat_id_raw,
+            "arg": arg,
+            "has_reply": msg.reply_to_message().is_some(),
+        }),
+    );
+
+    handle_pet_friend(&bot, &pool, &msg, chat_id_raw, from, &from_name, arg).await
+}
+
 // ── Registration ─────────────────────────────────────────────────────────────
 
 pub async fn huyareg_handler(
@@ -818,9 +1007,7 @@ pub async fn huyareg_handler(
     let from = match msg.from.as_ref() { Some(f) => f, None => return Ok(()) };
     let tg_id = from.id.0 as i64;
     let chat_id_raw = msg.chat.id.0;
-    let name = from.username.as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| from.first_name.clone());
+    let name = display_name_from_user(from);
 
     user::upsert_tg_user(&pool, from).await?;
 
@@ -1075,9 +1262,7 @@ pub async fn huyaskills_handler(
     }
     let from = match msg.from.as_ref() { Some(f) => f, None => return Ok(()) };
     let tg_id = from.id.0 as i64;
-    let name = from.username.as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| from.first_name.clone());
+    let name = display_name_from_user(from);
 
     let (h, _) = huya_db::get_or_create(&pool, msg.chat.id.0, tg_id).await?;
 
@@ -1112,9 +1297,7 @@ pub async fn huya_skill_callback(
     let clicker = query.from.id.0 as i64;
     let (h, _) = huya_db::get_or_create(&pool, msg_ref.chat().id.0, clicker).await?;
 
-    let name = query.from.username.as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| query.from.first_name.clone());
+    let name = display_name_from_user(&query.from);
 
     match huya_db::upgrade_skill(&pool, &h, skill).await? {
         Some(updated) => {
@@ -1195,9 +1378,7 @@ pub async fn huya_skill_page_callback(
     let clicker = query.from.id.0 as i64;
     let (h, _) = huya_db::get_or_create(&pool, msg_ref.chat().id.0, clicker).await?;
 
-    let name = query.from.username.as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| query.from.first_name.clone());
+    let name = display_name_from_user(&query.from);
 
     let _ = bot.answer_callback_query(query.id).await;
 

@@ -160,6 +160,7 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Huyatop => huya_handler::huyatop_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyaskills => huya_handler::huyaskills_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyashop => huya_handler::huyashop_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyapet(_) => huya_handler::huyapet_handler(bot, msg, cmd, pool).await,
                     }
                 }
                 UpdateKind::CallbackQuery(query) => callback_router(bot, query, pool, config).await,
@@ -245,6 +246,9 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }))
         .branch(case![Cmd::Huyashop].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             huya_handler::huyashop_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyapet(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huyapet_handler(bot, msg, cmd, pool).await
         }))
         .branch(case![Cmd::Pidoreg].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             game::pidoreg_handler(bot, msg, cmd, pool).await

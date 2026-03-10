@@ -613,6 +613,27 @@ grow_levelup = "🎉 <b>{name}</b> погладил хуяку: +{grow_cm} см,
 # {name} {grow_cm} {xp} {level} {size} — steroid + level-up
 grow_levelup_boosted = "💉🎉 Стероид + УРОВЕНЬ UP! <b>{name}</b>: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
 
+# Стадии поглаживания друга
+# {attacker} {target}
+pet_friend_stage1 = "{attacker} медленно обхватывает хуяку {target}…"
+pet_friend_stage2 = "аккуратно проводит рукой по стволу, не пропуская ни миллиметра."
+pet_friend_stage3 = "хуяка довольна и заметно оживает."
+
+# Результат поглаживания друга
+# {stage1} {stage2} {stage3} {heal} {xp} {target_hp} {target_max_hp} {energy_left}
+pet_friend_result = """{stage3}
+
+💚 Хуяка подлечена на {heal} HP (сейчас: {target_hp}/{target_max_hp}).
+✨ Ты получил {xp} XP.
+🖐 Энергия поглаживаний: {energy_left}/3."""
+
+pet_no_energy = "🖐 Энергия на поглаживания друзей закончилась. Попробуй завтра."
+pet_too_many_friends = "🖐 Сегодня ты уже достаточно друзей погладил (3 уникальных). Больше — завтра."
+pet_self = "🫠 <b>{name}</b> пытается погладить себя через /huyapet. Для себя есть только /huyagrow."
+pet_bot = "🤖 У бота нет хуяки для поглаживания. Потрогай кого-то живого."
+pet_ass = "🍑 Хочешь погладить задницу {target}? Сначала пусть отрастит себе хуяку."
+pet_no_target = "Укажи цель для /huyapet: ответом на сообщение или через /huyapet @user."
+
 # ── Бой (многораундовая мини-игра) ──────────────────────────────────────────
 # {challenger} {target} — challenger вызывает target на бой
 fight_challenge = "⚔️ <b>{challenger}</b> вызывает <b>{target}</b> на хуй-бой!\n\n🍆 Напор — бьёт В шары\n🎯 В шары — бьёт Финт\n🫸 Финт — бьёт Напор\n\n<i>До 5 раундов. Побеждает тот, у кого больше HP.</i>"

@@ -45,7 +45,9 @@ pub enum Cmd {
     Pidorscan(String),
     #[command(description = "autorun settings (admins only)")]
     Pidorset,
-    #[command(description = "challenge to pidor duel (tic-tac-toe); reply to user for tagged challenge")]
+    #[command(
+        description = "challenge to pidor duel (tic-tac-toe); reply to user for tagged challenge"
+    )]
     Pidorduel,
     #[command(description = "duel Elo leaderboard")]
     Duelstats,
@@ -53,10 +55,10 @@ pub enum Cmd {
     Pidorbet(String),
     #[command(description = "set chat language (admins only), e.g. /lang ru")]
     Lang(String),
-    #[command(description = "tamagotchi dick game status")]
-    Huya(String),
     #[command(description = "register to the dick game")]
     Huyareg,
+    #[command(description = "pet a friend's dick (@user or reply)")]
+    Huyapet(String),
     #[command(description = "grow your dick")]
     Huyagrow,
     #[command(description = "fight another player's dick")]
@@ -69,6 +71,8 @@ pub enum Cmd {
     Huyaskills,
     #[command(description = "shop for dick items and boosters")]
     Huyashop,
+    #[command(description = "tamagotchi dick game status")]
+    Huya(String),
     // RPG: development for future — disabled for now; /rpg shows stub message.
     #[command(description = "Pidor-Royale RPG (in development)")]
     Rpg,

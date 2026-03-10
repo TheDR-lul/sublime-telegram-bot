@@ -76,3 +76,21 @@ pub async fn get_by_username(pool: &PgPool, username: &str) -> Result<Option<TgU
     .await?;
     Ok(row)
 }
+
+/// Find user by display name (first_name or "first last"), preferring most recently seen.
+pub async fn find_by_display_name(pool: &PgPool, name: &str) -> Result<Option<TgUser>, AppError> {
+    let row = sqlx::query_as::<_, TgUser>(
+        r#"
+        SELECT id, tg_id, username, first_name, last_name, lang_code, is_blocked, created_at, updated_at, last_seen_at
+        FROM tguser
+        WHERE LOWER(first_name) = LOWER($1)
+           OR LOWER(first_name || ' ' || COALESCE(last_name, '')) = LOWER($1)
+        ORDER BY last_seen_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}

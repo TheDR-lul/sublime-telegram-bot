@@ -25,7 +25,8 @@ const HUYA_SELECT: &str =
      skill_berserker, skill_vampire, skill_fortress, skill_speedrun, skill_ghost, \
      skill_eternal, skill_absolute, \
      fights_won, fights_lost, \
-     atk_boost, def_boost, grow_boost";
+     atk_boost, def_boost, grow_boost, \
+     pet_energy_left, pet_energy_reset_at";
 
 const XP_PER_LEVEL: i32 = 100;
 const LEVEL_UP_BONUS_MM: i32 = 50;
@@ -104,47 +105,7 @@ pub async fn consume_action(pool: &PgPool, huya: &Huya) -> Result<bool, AppError
     let max_actions = huya.max_actions();
     let hp_regen = 10 + huya.skill_stamina * 3;
 
-    // #region agent log
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("debug-749781.log")
-    {
-        use std::io::Write;
-        let payload = format!(
-            "{{\"sessionId\":\"749781\",\"runId\":\"pre-fix\",\"hypothesisId\":\"A\",\"location\":\"src/db/huya.rs:consume_action\",\"message\":\"consume_action_enter\",\"data\":{{\"huya_id\":{},\"chat_id\":{},\"actions_left\":{},\"actions_reset_at\":\"{}\",\"today\":\"{}\",\"max_actions\":{},\"hp\":{},\"hp_regen\":{}}},\"timestamp\":{}}}\n",
-            huya.id,
-            huya.chat_id,
-            huya.actions_left,
-            huya.actions_reset_at,
-            today,
-            max_actions,
-            huya.hp,
-            hp_regen,
-            chrono::Utc::now().timestamp_millis()
-        );
-        let _ = f.write_all(payload.as_bytes());
-    }
-    // #endregion
-
     let limit_enabled = energy_limit_enabled(pool, huya.chat_id).await?;
-
-    // #region agent log
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("debug-749781.log")
-    {
-        use std::io::Write;
-        let payload = format!(
-            "{{\"sessionId\":\"749781\",\"runId\":\"pre-fix\",\"hypothesisId\":\"B\",\"location\":\"src/db/huya.rs:consume_action\",\"message\":\"consume_action_limit_flag\",\"data\":{{\"huya_id\":{},\"limit_enabled\":{}}},\"timestamp\":{}}}\n",
-            huya.id,
-            limit_enabled,
-            chrono::Utc::now().timestamp_millis()
-        );
-        let _ = f.write_all(payload.as_bytes());
-    }
-    // #endregion
 
     // If limit is globally disabled — only regenerate HP, do not touch actions_left.
     if !limit_enabled {
@@ -175,22 +136,6 @@ pub async fn consume_action(pool: &PgPool, huya: &Huya) -> Result<bool, AppError
     }
 
     if huya.actions_left <= 0 {
-        // #region agent log
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("debug-749781.log")
-        {
-            use std::io::Write;
-            let payload = format!(
-                "{{\"sessionId\":\"749781\",\"runId\":\"pre-fix\",\"hypothesisId\":\"C\",\"location\":\"src/db/huya.rs:consume_action\",\"message\":\"consume_action_no_actions\",\"data\":{{\"huya_id\":{},\"actions_left\":{}}},\"timestamp\":{}}}\n",
-                huya.id,
-                huya.actions_left,
-                chrono::Utc::now().timestamp_millis()
-            );
-            let _ = f.write_all(payload.as_bytes());
-        }
-        // #endregion
         return Ok(false);
     }
 
@@ -647,6 +592,201 @@ pub fn skills_available_to_upgrade(huya: &Huya) -> Vec<&'static str> {
         .filter(|s| skill_upgrade_info(huya, s).is_some())
         .copied()
         .collect()
+}
+
+// ── Pet energy (/huyapet) ─────────────────────────────────────────────────────
+
+/// Reset pet energy once per day; returns up-to-date Huya row.
+pub async fn reset_pet_energy_if_needed(pool: &PgPool, huya: &Huya) -> Result<Huya, AppError> {
+    let today = Utc::now().date_naive();
+    if huya.pet_energy_reset_at >= today {
+        return Ok(huya.clone());
+    }
+    let updated = sqlx::query_as::<_, Huya>(
+        &format!(
+            "UPDATE huya SET pet_energy_left = 3, pet_energy_reset_at = $1 \
+             WHERE id = $2 RETURNING {HUYA_SELECT}"
+        ),
+    )
+    .bind(today)
+    .bind(huya.id)
+    .fetch_one(pool)
+    .await?;
+    Ok(updated)
+}
+
+/// Consume one pet energy; returns updated Huya or None if no energy left.
+pub async fn consume_pet_energy(pool: &PgPool, huya: &Huya) -> Result<Option<Huya>, AppError> {
+    let current = reset_pet_energy_if_needed(pool, huya).await?;
+    if current.pet_energy_left <= 0 {
+        return Ok(None);
+    }
+    let updated = sqlx::query_as::<_, Huya>(
+        &format!(
+            "UPDATE huya SET pet_energy_left = pet_energy_left - 1 \
+             WHERE id = $1 RETURNING {HUYA_SELECT}"
+        ),
+    )
+    .bind(current.id)
+    .fetch_one(pool)
+    .await?;
+    Ok(Some(updated))
+}
+
+/// Check whether `from_tg_id` can pet `target_tg_id` today (no more than 3 distinct friends).
+pub async fn can_pet_friend(
+    pool: &PgPool,
+    chat_id: i64,
+    from_tg_id: i64,
+    target_tg_id: i64,
+) -> Result<bool, AppError> {
+    let today = Utc::now().date_naive();
+    // Already petted this target today – always allowed.
+    let existing: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM huya_pet_daily \
+         WHERE chat_id = $1 AND from_tg_id = $2 AND target_tg_id = $3 AND day = $4",
+    )
+    .bind(chat_id)
+    .bind(from_tg_id)
+    .bind(target_tg_id)
+    .bind(today)
+    .fetch_optional(pool)
+    .await?;
+    if existing.is_some() {
+        return Ok(true);
+    }
+    // Count distinct friends already petted today.
+    let (friends_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT target_tg_id) \
+         FROM huya_pet_daily \
+         WHERE chat_id = $1 AND from_tg_id = $2 AND day = $3",
+    )
+    .bind(chat_id)
+    .bind(from_tg_id)
+    .bind(today)
+    .fetch_one(pool)
+    .await?;
+    Ok(friends_count < 3)
+}
+
+/// Register that `from_tg_id` has petted `target_tg_id` today.
+pub async fn register_pet_friend(
+    pool: &PgPool,
+    chat_id: i64,
+    from_tg_id: i64,
+    target_tg_id: i64,
+) -> Result<(), AppError> {
+    let today = Utc::now().date_naive();
+    sqlx::query(
+        "INSERT INTO huya_pet_daily (chat_id, from_tg_id, target_tg_id, day) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (chat_id, from_tg_id, target_tg_id, day) DO NOTHING",
+    )
+    .bind(chat_id)
+    .bind(from_tg_id)
+    .bind(target_tg_id)
+    .bind(today)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Outcome state for pet_friend.
+pub enum PetFriendState {
+    Ok,
+    NoEnergy,
+    TooManyFriends,
+    TargetIsAss,
+}
+
+pub struct PetFriendResult {
+    pub from: Huya,
+    pub target: Huya,
+    pub heal: i32,
+    pub xp_gain: i32,
+    pub state: PetFriendState,
+}
+
+/// Pet a friend's Huya using separate pet energy and daily friend limit.
+pub async fn pet_friend(
+    pool: &PgPool,
+    chat_id: i64,
+    from_tg_id: i64,
+    target_tg_id: i64,
+) -> Result<PetFriendResult, AppError> {
+    let (from_huya, _) = get_or_create(pool, chat_id, from_tg_id).await?;
+    let (target_huya, _) = get_or_create(pool, chat_id, target_tg_id).await?;
+
+    if target_huya.is_ass() {
+        return Ok(PetFriendResult {
+            from: from_huya,
+            target: target_huya,
+            heal: 0,
+            xp_gain: 0,
+            state: PetFriendState::TargetIsAss,
+        });
+    }
+
+    if !can_pet_friend(pool, chat_id, from_tg_id, target_tg_id).await? {
+        return Ok(PetFriendResult {
+            from: from_huya,
+            target: target_huya,
+            heal: 0,
+            xp_gain: 0,
+            state: PetFriendState::TooManyFriends,
+        });
+    }
+
+    let Some(updated_from) = consume_pet_energy(pool, &from_huya).await? else {
+        return Ok(PetFriendResult {
+            from: from_huya,
+            target: target_huya,
+            heal: 0,
+            xp_gain: 0,
+            state: PetFriendState::NoEnergy,
+        });
+    };
+
+    let heal = {
+        let base = 10 + target_huya.skill_stamina * 2;
+        let max_hp = target_huya.max_hp();
+        let new_hp = (target_huya.hp + base).min(max_hp);
+        let applied = new_hp - target_huya.hp;
+        sqlx::query("UPDATE huya SET hp = $1 WHERE id = $2")
+            .bind(new_hp)
+            .bind(target_huya.id)
+            .execute(pool)
+            .await?;
+        applied
+    };
+
+    let xp_gain: i32 = {
+        let mut rng = rand::rng();
+        rng.random_range(5..=15)
+    };
+
+    let updated_from_with_xp = sqlx::query_as::<_, Huya>(
+        &format!(
+            "UPDATE huya SET xp = xp + $1 \
+             WHERE id = $2 RETURNING {HUYA_SELECT}"
+        ),
+    )
+    .bind(xp_gain)
+    .bind(updated_from.id)
+    .fetch_one(pool)
+    .await?;
+
+    register_pet_friend(pool, chat_id, from_tg_id, target_tg_id).await?;
+
+    let (target_updated, _) = get_or_create(pool, chat_id, target_tg_id).await?;
+
+    Ok(PetFriendResult {
+        from: updated_from_with_xp,
+        target: target_updated,
+        heal,
+        xp_gain,
+        state: PetFriendState::Ok,
+    })
 }
 
 /// Spend skill_points to level up a skill. Returns updated Huya on success.
