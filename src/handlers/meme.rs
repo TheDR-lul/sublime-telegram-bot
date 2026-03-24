@@ -8,6 +8,7 @@ use teloxide::types::{
 };
 
 use crate::error::AppError;
+use crate::telegram::topic_routing::{send_text_in_origin_topic, topic_thread_id};
 
 const MEME_REFRESH: &str = "meme_en_refresh";
 const MEME_SAVE: &str = "meme_en_save";
@@ -56,13 +57,18 @@ pub async fn meme_handler(
     match get_random_en_meme().await {
         Ok((meme_link, source_link)) => {
             let url = url::Url::parse(&meme_link)?;
-            bot.send_photo(msg.chat.id, teloxide::types::InputFile::url(url))
-                .reply_markup(generate_keyboard(&source_link, MEME_SAVE, MEME_REFRESH)?)
-                .await?;
+            let mut request = bot
+                .send_photo(msg.chat.id, teloxide::types::InputFile::url(url))
+                .reply_markup(generate_keyboard(&source_link, MEME_SAVE, MEME_REFRESH)?);
+            if let Some(thread) = topic_thread_id(&msg) {
+                request = request.message_thread_id(thread);
+            }
+            request.await?;
         }
         Err(e) => {
             tracing::warn!("Failed to get meme: {:?}", e);
-            bot.send_message(msg.chat.id, crate::i18n::LOCALE.t("ru", "meme.error_generic")).await?;
+            send_text_in_origin_topic(&bot, &msg, crate::i18n::LOCALE.t("ru", "meme.error_generic"))
+                .await?;
         }
     }
     Ok(())

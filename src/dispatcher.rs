@@ -30,22 +30,21 @@ async fn check_rate_limit(
     rl.check(chat_id, user_id).await
 }
 
-async fn is_topic_allowed(pool: &PgPool, msg: &teloxide::types::Message) -> bool {
+async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Message) -> bool {
     // Non-supergroups (private chats, basic groups) — always allowed.
     if !msg.chat.is_supergroup() {
         return true;
     }
 
-    // Allow service commands everywhere so админы могут управлять ботом:
-    // - /menu        — админ-панель
-    // - /bothere*    — включение/выключение бота в топике
+    // Allow only /menu outside enabled topics, and only for chat admins.
     if let Some(text) = msg.text() {
         let t = text.trim();
-        if t.starts_with("/menu")
-            || t.starts_with("/bothere")
-            || t.starts_with("/bothereoff")
-        {
-            return true;
+        if t.starts_with("/menu") {
+            let user_id = msg.from.as_ref().map(|u| u.id.0);
+            return match user_id {
+                Some(uid) => game::is_chat_admin(bot, msg.chat.id, uid).await,
+                None => false,
+            };
         }
     }
 
@@ -58,7 +57,9 @@ async fn is_topic_allowed(pool: &PgPool, msg: &teloxide::types::Message) -> bool
         .or_else(|| msg.reply_to_message().and_then(|reply| reply.thread_id))
     {
         Some(id) => i64::from(id.0 .0),
-        None => return true,
+        // In supergroups with topic routing enabled, commands from General/no-thread
+        // must not run (except service commands handled above).
+        None => return false,
     };
 
     let chat_id = msg.chat.id.0;
@@ -218,7 +219,9 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
 
 fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     Update::filter_message()
-        .filter_async(|msg: Message, pool: PgPool| async move { is_topic_allowed(&pool, &msg).await })
+        .filter_async(|msg: Message, pool: PgPool, bot: Bot| async move {
+            is_topic_allowed(&pool, &bot, &msg).await
+        })
         .filter_command::<Cmd>()
         .branch(case![Cmd::Menu].endpoint(misc::menu_handler))
         .branch(case![Cmd::About].endpoint(about::about_handler))

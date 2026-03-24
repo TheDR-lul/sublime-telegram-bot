@@ -18,6 +18,7 @@ use crate::db::user;
 use crate::db::achievements;
 use crate::error::AppError;
 use crate::i18n::LOCALE;
+use crate::telegram::topic_routing::{send_text_in_origin_topic, topic_thread_id};
 
 use tokio_util::sync::CancellationToken;
 
@@ -223,9 +224,13 @@ pub async fn pidoreg_handler(
     if already_registered {
         let username = escape_html(&from_user.full_name());
         let text = LOCALE.t_rand_fmt(&game.lang, "pidor.already_registered", &[("username", &username)]);
-        bot.send_message(msg.chat.id, text)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        let mut request = bot
+            .send_message(msg.chat.id, text)
+            .parse_mode(teloxide::types::ParseMode::Html);
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
         return Ok(());
     }
 
@@ -235,22 +240,33 @@ pub async fn pidoreg_handler(
     if players.is_empty() {
         let username = from_user.full_name();
         let text = LOCALE.t_fmt(&game.lang, "pidor.errors.zero_players", &[("username", &escape_html(&username))]);
-        bot.send_message(msg.chat.id, text)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        let mut request = bot
+            .send_message(msg.chat.id, text)
+            .parse_mode(teloxide::types::ParseMode::Html);
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
         return Ok(());
     }
-    bot.send_message(msg.chat.id, LOCALE.t(&game.lang, "pidor.static.registration_success"))
-        .parse_mode(teloxide::types::ParseMode::Html)
-        .await?;
+    let mut request = bot
+        .send_message(msg.chat.id, LOCALE.t(&game.lang, "pidor.static.registration_success"))
+        .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
 
     // Achievement: first registration in game.
     if achievements::grant(&pool, tg_user.id, "first_pidoreg").await? {
-        bot.send_message(
+        let mut request = bot.send_message(
             msg.chat.id,
             LOCALE.t(&game.lang, "achievements.notifications.first_pidoreg"),
-        )
-        .await?;
+        );
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
     }
     Ok(())
 }
@@ -274,13 +290,21 @@ pub async fn pidorunreg_handler(
     let game = game::get_or_create_game(&pool, chat_id).await?;
     
     if game::remove_player(&pool, game.id, tg_user.id).await? {
-        bot.send_message(msg.chat.id, LOCALE.t(&game.lang, "pidor.static.remove_registration"))
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        let mut request = bot
+            .send_message(msg.chat.id, LOCALE.t(&game.lang, "pidor.static.remove_registration"))
+            .parse_mode(teloxide::types::ParseMode::Html);
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
     } else {
-        bot.send_message(msg.chat.id, LOCALE.t(&game.lang, "pidor.static.remove_not_registered"))
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        let mut request = bot
+            .send_message(msg.chat.id, LOCALE.t(&game.lang, "pidor.static.remove_not_registered"))
+            .parse_mode(teloxide::types::ParseMode::Html);
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
     }
     Ok(())
 }
@@ -330,8 +354,7 @@ pub async fn pidorbet_handler(
     let lang = g.lang.as_str();
     let players = game::get_players(&pool, g.id).await?;
     if !players.iter().any(|p| p.tg_id == bettor_tg_id) {
-        bot.send_message(msg.chat.id, LOCALE.t(lang, "bet.not_registered"))
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t(lang, "bet.not_registered")).await?;
         return Ok(());
     }
 
@@ -341,8 +364,7 @@ pub async fn pidorbet_handler(
     let slot = "manual";
 
     if game::get_today_result_for_slot(&pool, g.id, cur_year, cur_day, slot).await?.is_some() {
-        bot.send_message(msg.chat.id, LOCALE.t(lang, "bet.already_played"))
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t(lang, "bet.already_played")).await?;
         return Ok(());
     }
 
@@ -351,15 +373,13 @@ pub async fn pidorbet_handler(
         Some(id) if id == bettor_tg_id => id,
         Some(id) => {
             if !players.iter().any(|p| p.tg_id == id) {
-                bot.send_message(msg.chat.id, LOCALE.t(lang, "bet.target_not_in_game"))
-                    .await?;
+                send_text_in_origin_topic(&bot, &msg, LOCALE.t(lang, "bet.target_not_in_game")).await?;
                 return Ok(());
             }
             id
         }
         None => {
-            bot.send_message(msg.chat.id, LOCALE.t(lang, "bet.usage"))
-                .await?;
+            send_text_in_origin_topic(&bot, &msg, LOCALE.t(lang, "bet.usage")).await?;
             return Ok(());
         }
     };
@@ -377,15 +397,18 @@ pub async fn pidorbet_handler(
         }
     };
 
-    bot.send_message(
+    let mut request = bot.send_message(
         msg.chat.id,
         LOCALE.t_fmt(lang, "bet.placed", &[("bettor", &bettor_name), ("target", &target_name)]),
     )
-    .parse_mode(teloxide::types::ParseMode::Html)
-    .await?;
+    .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
 
     if achievements::grant(&pool, tg_user.id, "bet_first").await? {
-        bot.send_message(msg.chat.id, LOCALE.t(lang, "achievements.notifications.bet_first"))
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t(lang, "achievements.notifications.bet_first"))
             .await?;
     }
 
@@ -780,9 +803,13 @@ pub async fn pidorstats_handler(
         ("player_stats", &player_table),
         ("player_count", &players.len().to_string()),
     ]);
-    bot.send_message(msg.chat.id, answer)
-        .parse_mode(teloxide::types::ParseMode::Html)
-        .await?;
+    let mut request = bot
+        .send_message(msg.chat.id, answer)
+        .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -806,9 +833,13 @@ pub async fn pidorall_handler(
         ("player_stats", &player_table),
         ("player_count", &players.len().to_string()),
     ]);
-    bot.send_message(msg.chat.id, answer)
-        .parse_mode(teloxide::types::ParseMode::Html)
-        .await?;
+    let mut request = bot
+        .send_message(msg.chat.id, answer)
+        .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -832,17 +863,25 @@ pub async fn pidorme_handler(
             ("username", &escape_html(&user.full_username(false))),
             ("amount", &count.to_string()),
         ]);
-        bot.send_message(msg.chat.id, text)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        let mut request = bot
+            .send_message(msg.chat.id, text)
+            .parse_mode(teloxide::types::ParseMode::Html);
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
     } else {
         let text = LOCALE.t_fmt(&game.lang, "pidor.static.stats_personal", &[
             ("username", &escape_html(&tg_user.full_username(false))),
             ("amount", "0"),
         ]);
-        bot.send_message(msg.chat.id, text)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        let mut request = bot
+            .send_message(msg.chat.id, text)
+            .parse_mode(teloxide::types::ParseMode::Html);
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
     }
     Ok(())
 }
@@ -860,9 +899,13 @@ pub async fn pidoryear_handler(
     if db_results.is_empty() {
         let from_user = msg.from.as_ref().map(|u| u.full_name()).unwrap_or_else(|| "user".to_string());
         let text = LOCALE.t_fmt(&game.lang, "pidor.errors.zero_players", &[("username", &escape_html(&from_user))]);
-        bot.send_message(msg.chat.id, text)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        let mut request = bot
+            .send_message(msg.chat.id, text)
+            .parse_mode(teloxide::types::ParseMode::Html);
+        if let Some(thread) = topic_thread_id(&msg) {
+            request = request.message_thread_id(thread);
+        }
+        request.await?;
         return Ok(());
     }
     
@@ -872,9 +915,13 @@ pub async fn pidoryear_handler(
         ("username", &escape_html(&db_results[0].0.full_username(false))),
         ("player_list", &player_table),
     ]);
-    bot.send_message(msg.chat.id, answer)
-        .parse_mode(teloxide::types::ParseMode::Html)
-        .await?;
+    let mut request = bot
+        .send_message(msg.chat.id, answer)
+        .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -930,8 +977,7 @@ pub async fn pidorset_handler(bot: Bot, msg: Message, pool: PgPool) -> Result<()
     let user_id = from_user.id.0;
     if !is_chat_admin(&bot, msg.chat.id, user_id as u64).await {
         let game = game::get_or_create_game(&pool, msg.chat.id.0).await?;
-        bot.send_message(msg.chat.id, LOCALE.t(&game.lang, "pidor.settings.admin_only"))
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t(&game.lang, "pidor.settings.admin_only")).await?;
         return Ok(());
     }
     send_pidorset_message(&bot, &pool, msg.chat.id).await

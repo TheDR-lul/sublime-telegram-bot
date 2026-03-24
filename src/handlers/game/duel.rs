@@ -12,6 +12,7 @@ use crate::db::duel as duel_db;
 use crate::db::models::DuelGame;
 use crate::error::AppError;
 use crate::i18n::LOCALE;
+use crate::telegram::topic_routing::{send_text_in_origin_topic, topic_thread_id};
 use crate::telegram::target_resolver::{resolve_target as resolve_target_global, ResolvedTarget};
 
 fn name_from_tg_user(u: &teloxide::types::User) -> String {
@@ -91,7 +92,7 @@ pub async fn pidorduel_handler(
     let from = match msg.from.as_ref() {
         Some(f) => f,
         None => {
-            bot.send_message(msg.chat.id, LOCALE.t("ru", "duel.static.anon_cant_duel"))
+            send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "duel.static.anon_cant_duel"))
                 .await?;
             return Ok(());
         }
@@ -109,14 +110,14 @@ pub async fn pidorduel_handler(
     };
     if let Some(inv_id) = invited_tg_id {
         if inv_id == challenger_tg_id {
-            bot.send_message(msg.chat.id, LOCALE.t("ru", "duel.static.challenge_self"))
+            send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "duel.static.challenge_self"))
                 .await?;
             return Ok(());
         }
     }
 
     if duel_db::get_pending_or_active_by_chat(&pool, chat_id).await?.is_some() {
-        bot.send_message(msg.chat.id, LOCALE.t("ru", "duel.static.duel_in_progress"))
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "duel.static.duel_in_progress"))
             .await?;
         return Ok(());
     }
@@ -147,11 +148,14 @@ pub async fn pidorduel_handler(
         )
     };
 
-    let sent = bot
+    let mut request = bot
         .send_message(msg.chat.id, text)
         .parse_mode(teloxide::types::ParseMode::Html)
-        .reply_markup(duel_accept_keyboard(d.id, tagged))
-        .await?;
+        .reply_markup(duel_accept_keyboard(d.id, tagged));
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    let sent = request.await?;
     duel_db::set_invite_message_id(&pool, d.id, sent.id.0 as i64).await?;
     Ok(())
 }
@@ -935,8 +939,7 @@ pub async fn duelstats_handler(
     let chat_id = msg.chat.id.0;
     let leaderboard = duel_db::get_duel_leaderboard(&pool, chat_id, 10).await?;
     if leaderboard.is_empty() {
-        bot.send_message(msg.chat.id, LOCALE.t("ru", "duel.stats.no_duels"))
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "duel.stats.no_duels")).await?;
         return Ok(());
     }
 
@@ -991,9 +994,13 @@ pub async fn duelstats_handler(
         }
     }
 
-    bot.send_message(msg.chat.id, text)
-        .parse_mode(teloxide::types::ParseMode::Html)
-        .await?;
+    let mut request = bot
+        .send_message(msg.chat.id, text)
+        .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 

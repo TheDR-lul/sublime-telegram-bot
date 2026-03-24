@@ -14,6 +14,7 @@ use crate::db::models::Huya;
 use crate::db::user;
 use crate::error::AppError;
 use crate::i18n::LOCALE;
+use crate::telegram::topic_routing::{send_text_in_origin_topic, topic_thread_id};
 use crate::telegram::target_resolver::{resolve_target as resolve_target_global, ResolvedTarget};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1027,6 +1028,9 @@ pub async fn huyareg_handler(
 
     let mut req = bot.send_message(msg.chat.id, text)
         .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        req = req.message_thread_id(thread);
+    }
     if !was_created {
         req = req.reply_markup(huya_stat_keyboard(tg_id, actions_available(&h)));
     }
@@ -1047,7 +1051,7 @@ pub async fn huyatop_handler(
     }
     let rows = huya_db::top(&pool, msg.chat.id.0, 10).await?;
     if rows.is_empty() {
-        bot.send_message(msg.chat.id, LOCALE.t("ru", "huya.top_empty")).await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "huya.top_empty")).await?;
         return Ok(());
     }
 
@@ -1070,9 +1074,13 @@ pub async fn huyatop_handler(
         text.push_str(&line);
     }
 
-    bot.send_message(msg.chat.id, text)
-        .parse_mode(teloxide::types::ParseMode::Html)
-        .await?;
+    let mut request = bot
+        .send_message(msg.chat.id, text)
+        .parse_mode(teloxide::types::ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -1266,10 +1274,13 @@ pub async fn huyaskills_handler(
 
     let (h, _) = huya_db::get_or_create(&pool, msg.chat.id.0, tg_id).await?;
 
-    bot.send_message(msg.chat.id, skills_text(&h, &name))
+    let mut request = bot.send_message(msg.chat.id, skills_text(&h, &name))
         .parse_mode(teloxide::types::ParseMode::Html)
-        .reply_markup(skills_keyboard(&h, 0))
-        .await?;
+        .reply_markup(skills_keyboard(&h, 0));
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -1439,10 +1450,13 @@ pub async fn huyashop_handler(
 
     let text = LOCALE.t_fmt("ru", "huya.shop_header", &[("size", &h.display_cm())]);
 
-    bot.send_message(msg.chat.id, text)
+    let mut request = bot.send_message(msg.chat.id, text)
         .parse_mode(teloxide::types::ParseMode::Html)
-        .reply_markup(shop_keyboard(tg_id))
-        .await?;
+        .reply_markup(shop_keyboard(tg_id));
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 

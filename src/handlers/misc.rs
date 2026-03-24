@@ -11,6 +11,7 @@ use crate::error::AppError;
 use crate::handlers::about;
 use crate::handlers::game::commands as game_commands;
 use crate::i18n::LOCALE;
+use crate::telegram::topic_routing::send_text_in_origin_topic;
 use crate::db::chat_topics;
 use crate::db::kv;
 
@@ -54,6 +55,24 @@ async fn get_main_topic_id(pool: &PgPool, chat_id: i64) -> Result<Option<i64>, A
     Ok(raw.and_then(|s| s.parse::<i64>().ok()))
 }
 
+async fn refresh_topics_menu_message(
+    bot: &Bot,
+    pool: &PgPool,
+    chat_id: ChatId,
+    message_id: Option<MessageId>,
+    regular_msg: Option<&Message>,
+) -> Result<(), AppError> {
+    if let Some(mid) = message_id {
+        let (text, markup) = build_topics_menu_view(pool, chat_id.0, regular_msg).await?;
+        // Ignore edit race errors (e.g. outdated message state after fast taps).
+        let _ = bot
+            .edit_message_text(chat_id, mid, text)
+            .reply_markup(markup)
+            .await;
+    }
+    Ok(())
+}
+
 pub async fn slap_handler(
     bot: Bot,
     msg: Message,
@@ -75,16 +94,17 @@ pub async fn slap_handler(
             })
             .unwrap_or_else(|| "кто-то".to_string())
     } else {
-        bot.send_message(msg.chat.id, LOCALE.t("ru", "slap.no_reply"))
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "slap.no_reply")).await?;
         return Ok(());
     };
     
     let text = LOCALE.t_rand_fmt("ru", "slap.phrases", &[("who", &who), ("target", &target)]);
     
-    bot.send_message(msg.chat.id, text)
-        .parse_mode(ParseMode::Html)
-        .await?;
+    let mut request = bot.send_message(msg.chat.id, text).parse_mode(ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -93,7 +113,7 @@ pub async fn rpg_disabled_handler(
     msg: Message,
     _: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
-    bot.send_message(msg.chat.id, LOCALE.t("ru", "rpg.disabled")).await?;
+    send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "rpg.disabled")).await?;
     Ok(())
 }
 
@@ -113,7 +133,7 @@ pub async fn shrug_handler(
     msg: Message,
     _: crate::handlers::commands::Cmd,
 ) -> Result<(), AppError> {
-    bot.send_message(msg.chat.id, r"¯\_(ツ)_/¯").await?;
+    send_text_in_origin_topic(&bot, &msg, r"¯\_(ツ)_/¯").await?;
     Ok(())
 }
 
@@ -132,9 +152,11 @@ pub async fn me_handler(
         }
         _ => return Ok(()),
     };
-    bot.send_message(msg.chat.id, text)
-        .parse_mode(ParseMode::Html)
-        .await?;
+    let mut request = bot.send_message(msg.chat.id, text).parse_mode(ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -148,14 +170,15 @@ pub async fn google_handler(
         _ => return Ok(()),
     };
     if query.is_empty() {
-        bot.send_message(msg.chat.id, LOCALE.t("ru", "inline.google_no_query"))
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "inline.google_no_query")).await?;
         return Ok(());
     }
     let url = format!("https://lmgtfy.com/?q={}", url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>());
-    bot.send_message(msg.chat.id, url)
-        .disable_link_preview(true)
-        .await?;
+    let mut request = bot.send_message(msg.chat.id, url).disable_link_preview(true);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -190,15 +213,15 @@ pub async fn pidorscan_handler(
     let percent: u8 = rng.random_range(0..=100);
 
     let intro = LOCALE.t_rand_fmt("ru", "pidorscan.intro", &[("name", &target_name)]);
-    bot.send_message(msg.chat.id, intro).await?;
+    send_text_in_origin_topic(&bot, &msg, intro).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
     let analysis = LOCALE.t_rand("ru", "pidorscan.analysis");
-    bot.send_message(msg.chat.id, analysis).await?;
+    send_text_in_origin_topic(&bot, &msg, analysis).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(850)).await;
     let algo = LOCALE.t_rand("ru", "pidorscan.algo");
-    bot.send_message(msg.chat.id, algo).await?;
+    send_text_in_origin_topic(&bot, &msg, algo).await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
 
@@ -217,9 +240,11 @@ pub async fn pidorscan_handler(
         LOCALE.t_fmt("ru", "pidorscan.verdict_max", &[("name", &name_escaped), ("percent", &percent_str)])
     };
 
-    bot.send_message(msg.chat.id, verdict)
-        .parse_mode(ParseMode::Html)
-        .await?;
+    let mut request = bot.send_message(msg.chat.id, verdict).parse_mode(ParseMode::Html);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
 
     Ok(())
 }
@@ -544,7 +569,14 @@ pub async fn menu_callback(
                 game_commands::send_pidorall(&bot, &pool, chat_id).await?;
             }
             "about" => {
-                about::send_about(&bot, chat_id).await?;
+                about::send_about(
+                    &bot,
+                    chat_id,
+                    regular_msg
+                        .as_ref()
+                        .and_then(|msg| msg.thread_id.or_else(|| msg.reply_to_message().and_then(|r| r.thread_id))),
+                )
+                .await?;
             }
             "pidorset" => {
                 let user_id = query.from.id.0 as u64;
@@ -640,9 +672,6 @@ pub async fn menu_callback(
                     if get_main_topic_id(&pool, chat_id_raw).await? == Some(topic_id) {
                         let _ = kv::del(&pool, chat_id_raw, MAIN_TOPIC_KEY).await?;
                     }
-                    bot.send_message(chat_id, "Бот отключён в этом топике.")
-                        .message_thread_id(thread)
-                        .await?;
                 } else {
                     let count = chat_topics::count_enabled_topics(&pool, chat_id_raw).await?;
                     if count >= 3 {
@@ -652,9 +681,6 @@ pub async fn menu_callback(
                         return Ok(());
                     }
                     chat_topics::add_topic(&pool, chat_id_raw, topic_id).await?;
-                    bot.send_message(chat_id, "Бот включён в этом топике.")
-                        .message_thread_id(thread)
-                        .await?;
                 }
             }
             ["disable", id_str] => {
@@ -666,17 +692,6 @@ pub async fn menu_callback(
                         if get_main_topic_id(&pool, chat_id_raw).await? == Some(topic_id) {
                             let _ = kv::del(&pool, chat_id_raw, MAIN_TOPIC_KEY).await?;
                         }
-                        bot.send_message(
-                            chat_id,
-                            format!("Бот отключён в topic_id = {}.", topic_id),
-                        )
-                        .await?;
-                    } else {
-                        bot.send_message(
-                            chat_id,
-                            format!("Бот уже отключён в topic_id = {}.", topic_id),
-                        )
-                        .await?;
                     }
                 }
             }
@@ -699,44 +714,27 @@ pub async fn menu_callback(
                     return Ok(());
                 }
                 kv::set(&pool, chat_id_raw, MAIN_TOPIC_KEY, &topic_id.to_string()).await?;
-                bot.send_message(chat_id, "Этот топик назначен основным для фоновых сообщений.")
-                    .message_thread_id(thread)
+                bot.answer_callback_query(query_id)
+                    .text("Топик назначен основным.")
                     .await?;
             }
             ["set_main", id_str] => {
-                bot.answer_callback_query(query.id).await?;
+                bot.answer_callback_query(query_id.clone()).await?;
                 if let Ok(topic_id) = id_str.parse::<i64>() {
                     let chat_id_raw = chat_id.0;
                     if chat_topics::is_topic_enabled(&pool, chat_id_raw, topic_id).await? {
                         kv::set(&pool, chat_id_raw, MAIN_TOPIC_KEY, &topic_id.to_string()).await?;
-                        bot.send_message(
-                            chat_id,
-                            format!(
-                                "Основной топик установлен: topic_id = {}. Фоновые сообщения пойдут туда.",
-                                topic_id
-                            ),
-                        )
-                        .await?;
                     } else {
-                        bot.send_message(
-                            chat_id,
-                            format!("Нельзя выбрать topic_id = {}: бот в нём не включён.", topic_id),
-                        )
-                        .await?;
+                        bot.answer_callback_query(query_id.clone())
+                            .text("Этот топик не активен для бота.")
+                            .await?;
                     }
                 }
             }
             ["clear_main"] => {
                 bot.answer_callback_query(query.id).await?;
                 let chat_id_raw = chat_id.0;
-                let deleted = kv::del(&pool, chat_id_raw, MAIN_TOPIC_KEY).await?;
-                if deleted {
-                    bot.send_message(chat_id, "Основной топик сброшен. Фоновые сообщения будут в общий чат.")
-                        .await?;
-                } else {
-                    bot.send_message(chat_id, "Основной топик уже не задан.")
-                        .await?;
-                }
+                let _ = kv::del(&pool, chat_id_raw, MAIN_TOPIC_KEY).await?;
             }
             ["limit"] => {
                 bot.answer_callback_query(query_id)
@@ -748,11 +746,7 @@ pub async fn menu_callback(
             }
         }
         if let Some(mid) = message_id {
-            let (text, markup) = build_topics_menu_view(&pool, chat_id.0, regular_msg.as_ref()).await?;
-            let _ = bot
-                .edit_message_text(chat_id, mid, text)
-                .reply_markup(markup)
-                .await;
+            refresh_topics_menu_message(&bot, &pool, chat_id, message_id, regular_msg.as_ref()).await?;
             schedule_menu_delete(chat_id, mid);
         }
         return Ok(());
@@ -768,8 +762,7 @@ pub async fn lang_handler(
     pool: PgPool,
 ) -> Result<(), AppError> {
     if !msg.chat.is_group() && !msg.chat.is_supergroup() {
-        bot.send_message(msg.chat.id, "Язык можно менять только в групповых чатах.")
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, "Язык можно менять только в групповых чатах.").await?;
         return Ok(());
     }
 
@@ -779,8 +772,7 @@ pub async fn lang_handler(
     };
 
     if !game_commands::is_chat_admin(&bot, msg.chat.id, user_id).await {
-        bot.send_message(msg.chat.id, "Только администраторы могут менять язык чата.")
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, "Только администраторы могут менять язык чата.").await?;
         return Ok(());
     }
 
@@ -790,21 +782,23 @@ pub async fn lang_handler(
     };
 
     if arg.is_empty() {
-        bot.send_message(msg.chat.id, "Использование: /lang ru")
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, "Использование: /lang ru").await?;
         return Ok(());
     }
 
     const SUPPORTED: &[&str] = &["ru"];
     if !SUPPORTED.contains(&arg.as_str()) {
-        bot.send_message(msg.chat.id, format!("Неизвестный язык. Доступны: {}", SUPPORTED.join(", ")))
-            .await?;
+        send_text_in_origin_topic(
+            &bot,
+            &msg,
+            format!("Неизвестный язык. Доступны: {}", SUPPORTED.join(", ")),
+        )
+        .await?;
         return Ok(());
     }
 
     crate::db::game::set_chat_lang(&pool, msg.chat.id.0, &arg).await?;
-    bot.send_message(msg.chat.id, format!("Язык чата изменён на: {arg}"))
-        .await?;
+    send_text_in_origin_topic(&bot, &msg, format!("Язык чата изменён на: {arg}")).await?;
     Ok(())
 }
 
@@ -844,8 +838,12 @@ pub async fn bothere_handler(
     };
 
     if !game_commands::is_chat_admin(&bot, msg.chat.id, from.id.0 as u64).await {
-        bot.send_message(msg.chat.id, "Only chat administrators can enable the bot in a topic.")
-            .await?;
+        send_text_in_origin_topic(
+            &bot,
+            &msg,
+            "Only chat administrators can enable the bot in a topic.",
+        )
+        .await?;
         return Ok(());
     }
 
@@ -891,8 +889,12 @@ pub async fn bothereoff_handler(
     };
 
     if !game_commands::is_chat_admin(&bot, msg.chat.id, from.id.0 as u64).await {
-        bot.send_message(msg.chat.id, "Only chat administrators can disable the bot in a topic.")
-            .await?;
+        send_text_in_origin_topic(
+            &bot,
+            &msg,
+            "Only chat administrators can disable the bot in a topic.",
+        )
+        .await?;
         return Ok(());
     }
 
@@ -905,8 +907,9 @@ pub async fn bothereoff_handler(
             let active_topics = chat_topics::list_topics(&pool, chat_id).await?;
 
             if active_topics.is_empty() {
-                bot.send_message(
-                    msg.chat.id,
+                send_text_in_origin_topic(
+                    &bot,
+                    &msg,
                     "The bot is already disabled in all topics in this chat.",
                 )
                 .await?;

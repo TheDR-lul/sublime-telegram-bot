@@ -9,6 +9,7 @@ use teloxide::utils::html::escape as escape_html;
 use crate::db;
 use crate::error::AppError;
 use crate::i18n::LOCALE;
+use crate::telegram::topic_routing::{send_text_in_origin_topic, topic_thread_id};
 
 const ACH_DELETE_AFTER_SECS: u64 = 60;
 
@@ -122,8 +123,7 @@ pub async fn achievements_handler(
     let from_user = match msg.from.as_ref() {
         Some(u) => u,
         None => {
-            bot.send_message(msg.chat.id, LOCALE.t("ru", "achievements.anonymous"))
-                .await?;
+            send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "achievements.anonymous")).await?;
             return Ok(());
         }
     };
@@ -132,18 +132,20 @@ pub async fn achievements_handler(
     let list = db::achievements::list_for_user(&pool, tg_user.id).await?;
 
     if list.is_empty() {
-        bot.send_message(msg.chat.id, LOCALE.t("ru", "achievements.no_achievements"))
-            .await?;
+        send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "achievements.no_achievements")).await?;
         return Ok(());
     }
 
     let text = grid_text(&list, 0);
     let kb = build_grid_keyboard(&list, tg_user.id, 0);
 
-    let sent = bot.send_message(msg.chat.id, text)
+    let mut request = bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::Html)
-        .reply_markup(kb)
-        .await?;
+        .reply_markup(kb);
+    if let Some(thread) = topic_thread_id(&msg) {
+        request = request.message_thread_id(thread);
+    }
+    let sent = request.await?;
 
     schedule_ach_delete(bot, msg.chat.id, sent.id);
     Ok(())
