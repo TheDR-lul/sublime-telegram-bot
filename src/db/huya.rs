@@ -284,6 +284,7 @@ pub async fn self_fight(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Huya,
 pub struct StealResult {
     pub success: bool,
     pub steal_mm: i32,
+    pub backlash_mm: i32,
     pub chance_pct: u8,
     pub attacker: Huya,
     pub target: Huya,
@@ -310,8 +311,7 @@ pub async fn steal_attempt(
         .clamp(0.05, 0.85);
     let chance_pct = (chance * 100.0).round() as u8;
 
-    let raw_steal_f = tgt_len * parity * 0.20;
-    let steal_cap = (tgt_len * 0.40) as i32;
+    let steal_cap = (tgt_len * 0.28) as i32;
 
     let ghost_dodge = {
         let mut rng = rand::rng();
@@ -323,17 +323,56 @@ pub async fn steal_attempt(
         return Ok(StealResult {
             success: false,
             steal_mm: 0,
+            backlash_mm: 0,
             chance_pct,
             attacker: att_updated,
             target: tgt_updated,
         });
     }
 
-    let (success, steal_mm) = {
+    let (success, steal_mm, backlash_mm) = {
         let mut rng = rand::rng();
         let roll: f64 = rng.random_range(0.0_f64..1.0_f64);
-        let s = ((raw_steal_f as i32) + rng.random_range(5..=15)).min(steal_cap).max(5);
-        (roll < chance, s)
+        let success = roll < chance;
+
+        // Weighted steal distribution: most steals are small, large steals are rare.
+        let ratio = match rng.random_range(0.0_f64..1.0_f64) {
+            x if x < 0.60 => rng.random_range(0.04_f64..0.10_f64),
+            x if x < 0.90 => rng.random_range(0.10_f64..0.16_f64),
+            _ => rng.random_range(0.16_f64..0.22_f64),
+        };
+        let steal_mm = ((tgt_len * parity * ratio) as i32).min(steal_cap).max(3);
+
+        let backlash_mm = if success {
+            0
+        } else {
+            // Counter-bite chance grows with defensive/counter skills.
+            let backlash_chance = (
+                0.10
+                + tgt.skill_scales as f64 * 0.015
+                + tgt.skill_ironballs as f64 * 0.03
+                + tgt.skill_ghost as f64 * 0.04
+                + tgt.skill_eternal as f64 * 0.05
+                - att.skill_phantom as f64 * 0.02
+                - att.skill_cunning as f64 * 0.01
+            )
+            .clamp(0.05, 0.70);
+
+            if rng.random_range(0.0_f64..1.0_f64) < backlash_chance {
+                // Failed steal can backfire: attacker loses a tiny piece to target.
+                let backlash_ratio = (
+                    0.01
+                    + tgt.skill_ironballs as f64 * 0.002
+                    + tgt.skill_scales as f64 * 0.001
+                )
+                .clamp(0.01, 0.04);
+                ((att_len * backlash_ratio) as i32).clamp(2, 12)
+            } else {
+                0
+            }
+        };
+
+        (success, steal_mm, backlash_mm)
     };
 
     if success {
@@ -341,12 +380,24 @@ pub async fn steal_attempt(
             .bind(steal_mm).bind(att.id).execute(pool).await?;
         sqlx::query("UPDATE huya SET length_mm = length_mm - $1 WHERE id = $2")
             .bind(steal_mm).bind(tgt.id).execute(pool).await?;
+    } else if backlash_mm > 0 {
+        sqlx::query("UPDATE huya SET length_mm = length_mm - $1 WHERE id = $2")
+            .bind(backlash_mm).bind(att.id).execute(pool).await?;
+        sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE id = $2")
+            .bind(backlash_mm).bind(tgt.id).execute(pool).await?;
     }
 
     let (att_updated, _) = get_or_create(pool, chat_id, attacker_tg_id).await?;
     let (tgt_updated, _) = get_or_create(pool, chat_id, target_tg_id).await?;
 
-    Ok(StealResult { success, steal_mm, chance_pct, attacker: att_updated, target: tgt_updated })
+    Ok(StealResult {
+        success,
+        steal_mm,
+        backlash_mm,
+        chance_pct,
+        attacker: att_updated,
+        target: tgt_updated,
+    })
 }
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────

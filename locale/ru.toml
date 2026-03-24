@@ -671,6 +671,14 @@ fight_not_your_turn = "Это не твой бой!"
 steal_success = "🥷 <b>{attacker}</b> тайно утащил {steal_cm} см у <b>{target}</b>! Шанс был {chance_pct}%. Теперь у тебя: {new_size} см"
 # {attacker} {target} {chance_pct}
 steal_fail    = "🙅 <b>{attacker}</b> пытался обчистить <b>{target}</b>. Шанс был {chance_pct}%, но облажался!"
+# {attacker} {target} {chance_pct} {backlash_cm} {new_size}
+steal_fail_backlash = [
+  "🫦 <b>{target}</b> извернулся и откусил {backlash_cm} см твоей хуяки, <b>{attacker}</b>. Шанс был {chance_pct}%. Теперь у тебя: {new_size} см",
+  "🦷 Пока <b>{attacker}</b> пытался украсть, <b>{target}</b> перехватил инициативу и отгрыз {backlash_cm} см. Шанс был {chance_pct}%. Теперь: {new_size} см",
+  "😼 <b>{target}</b> поймал на подлёте и цапнул {backlash_cm} см у <b>{attacker}</b>. Шанс был {chance_pct}%. Осталось: {new_size} см",
+  "🤏 Кража сорвалась: <b>{target}</b> вывернулся и откусил {backlash_cm} см у <b>{attacker}</b>. Шанс был {chance_pct}%. Теперь у тебя: {new_size} см",
+  "🛡️ Контрприём от <b>{target}</b>: минус {backlash_cm} см у <b>{attacker}</b>. Шанс кражи был {chance_pct}%. Новый размер: {new_size} см"
+]
 steal_no_target = "Укажи цель: /huya steal @user или ответом на сообщение."
 # {name} {new_size}
 steal_self    = "🤦 <b>{name}</b> попытался украсть у себя и засунул себе хуяку в жопу... -0.5 см. Теперь: {new_size} см"

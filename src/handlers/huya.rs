@@ -821,6 +821,14 @@ async fn handle_steal(
             ("new_size",   &result.attacker.display_cm()),
             ("chance_pct", &result.chance_pct.to_string()),
         ])
+    } else if result.backlash_mm > 0 {
+        LOCALE.t_rand_fmt("ru", "huya.steal_fail_backlash", &[
+            ("attacker",     &escape_html(attacker_name)),
+            ("target",       &escape_html(&target_name)),
+            ("chance_pct",   &result.chance_pct.to_string()),
+            ("backlash_cm",  &mm_to_cm_str(result.backlash_mm)),
+            ("new_size",     &result.attacker.display_cm()),
+        ])
     } else {
         LOCALE.t_fmt("ru", "huya.steal_fail", &[
             ("attacker",   &escape_html(attacker_name)),
