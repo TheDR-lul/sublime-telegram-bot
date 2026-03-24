@@ -48,6 +48,23 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
         }
     }
 
+    let chat_id = msg.chat.id.0;
+
+    // If chat has no topic-routing configuration, allow commands everywhere.
+    // This keeps regular supergroups (without forum topics) fully functional.
+    match chat_topics::count_enabled_topics(pool, chat_id).await {
+        Ok(0) => return true,
+        Ok(_) => {}
+        Err(err) => {
+            tracing::error!(
+                "Failed to count enabled topics (chat_id={}): {:?}",
+                chat_id,
+                err
+            );
+            return false;
+        }
+    }
+
     // Resolve topic/thread id conservatively:
     // - use message.thread_id when present;
     // - otherwise use reply.thread_id (when command is sent as a reply inside a topic).
@@ -62,7 +79,6 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
         None => return false,
     };
 
-    let chat_id = msg.chat.id.0;
     match chat_topics::is_topic_enabled(pool, chat_id, thread_id).await {
         Ok(allowed) => allowed,
         Err(err) => {
