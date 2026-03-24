@@ -49,9 +49,15 @@ async fn is_topic_allowed(pool: &PgPool, msg: &teloxide::types::Message) -> bool
         }
     }
 
-    // No thread id — treat as "no topic" (старые супергруппы без topics): не фильтруем.
-    let thread_id = match msg.thread_id {
-        Some(id) => i64::from(id.0.0),
+    // Resolve topic/thread id conservatively:
+    // - use message.thread_id when present;
+    // - otherwise use reply.thread_id (when command is sent as a reply inside a topic).
+    // Never fallback to message.id because that can store a wrong topic id.
+    let thread_id = match msg
+        .thread_id
+        .or_else(|| msg.reply_to_message().and_then(|reply| reply.thread_id))
+    {
+        Some(id) => i64::from(id.0 .0),
         None => return true,
     };
 
@@ -81,7 +87,7 @@ async fn callback_router(
     if data.starts_with("rpg:") {
         return misc::rpg_disabled_callback(bot, query).await;
     }
-    if data.starts_with("menu:") {
+    if data.starts_with("menu:") || data.starts_with("topics:") {
         return misc::menu_callback(bot, query, pool, config).await;
     }
     if data.starts_with("settings:") {

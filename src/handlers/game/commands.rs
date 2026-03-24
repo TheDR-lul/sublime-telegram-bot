@@ -4,10 +4,15 @@ use rand::prelude::*;
 use sqlx::PgPool;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::{CallbackQuery, ChatId, ChatMemberStatus, InlineKeyboardButton, InlineKeyboardMarkup, Message};
+use teloxide::types::{
+    CallbackQuery, ChatId, ChatMemberStatus, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+    MessageId, ParseMode, ThreadId,
+};
 use teloxide::utils::html::escape as escape_html;
 
+use crate::db::chat_topics;
 use crate::db::game;
+use crate::db::kv;
 use crate::db::models::TgUser;
 use crate::db::user;
 use crate::db::achievements;
@@ -17,6 +22,7 @@ use crate::i18n::LOCALE;
 use tokio_util::sync::CancellationToken;
 
 const GAME_RESULT_TIME_DELAY_SECS: u64 = 2;
+const MAIN_TOPIC_KEY: &str = "bot_main_topic_id";
 
 fn pidorules_html(lang: &str) -> &'static str {
     LOCALE.t(lang, "pidor.static.rules_html")
@@ -24,6 +30,63 @@ fn pidorules_html(lang: &str) -> &'static str {
 
 fn current_datetime_kyiv() -> DateTime<chrono_tz::Tz> {
     Utc::now().with_timezone(&Kyiv)
+}
+
+async fn resolve_background_thread_id(
+    pool: &PgPool,
+    chat_id: i64,
+) -> Result<Option<ThreadId>, AppError> {
+    let topic_id = match kv::get(pool, chat_id, MAIN_TOPIC_KEY)
+        .await?
+        .map(|v| v.value)
+        .and_then(|v| v.parse::<i64>().ok())
+    {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+
+    if !chat_topics::is_topic_enabled(pool, chat_id, topic_id).await? {
+        let _ = kv::del(pool, chat_id, MAIN_TOPIC_KEY).await?;
+        return Ok(None);
+    }
+
+    let message_id = match i32::try_from(topic_id) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = kv::del(pool, chat_id, MAIN_TOPIC_KEY).await?;
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(ThreadId(MessageId(message_id))))
+}
+
+async fn send_text_to_target(
+    bot: &Bot,
+    chat_id: ChatId,
+    thread_id: Option<ThreadId>,
+    text: impl Into<String>,
+) -> Result<(), AppError> {
+    let mut request = bot.send_message(chat_id, text.into());
+    if let Some(thread) = thread_id {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
+    Ok(())
+}
+
+async fn send_html_to_target(
+    bot: &Bot,
+    chat_id: ChatId,
+    thread_id: Option<ThreadId>,
+    text: impl Into<String>,
+) -> Result<(), AppError> {
+    let mut request = bot.send_message(chat_id, text.into()).parse_mode(ParseMode::Html);
+    if let Some(thread) = thread_id {
+        request = request.message_thread_id(thread);
+    }
+    request.await?;
+    Ok(())
 }
 
 /// Menu/rules message auto-delete: 30 sec from last user interaction.
@@ -365,6 +428,20 @@ async fn run_pidor_game(
         PidorRunKind::Autorun(s) => (slot_str(s), false),
     };
     let chat_id_raw = chat_id.0;
+    let background_thread_id = if is_manual {
+        None
+    } else {
+        match resolve_background_thread_id(pool, chat_id_raw).await? {
+            Some(thread) => Some(thread),
+            None => {
+                tracing::info!(
+                    "Skip autorun for chat {}: main topic is not configured/enabled",
+                    chat_id_raw
+                );
+                return Ok(());
+            }
+        }
+    };
     let game = game::get_or_create_game(pool, chat_id_raw).await?;
     let lang = game.lang.as_str();
     
@@ -373,8 +450,13 @@ async fn run_pidor_game(
     
     if players.len() < 2 {
         if is_manual {
-            bot.send_message(chat_id, LOCALE.t(lang, "pidor.errors.not_enough_players"))
-                .await?;
+            send_text_to_target(
+                bot,
+                chat_id,
+                background_thread_id,
+                LOCALE.t(lang, "pidor.errors.not_enough_players"),
+            )
+            .await?;
         }
         return Ok(());
     }
@@ -392,9 +474,7 @@ async fn run_pidor_game(
             let text = LOCALE.t_fmt(lang, "pidor.static.current_result", &[
                 ("username", &escape_html(&winner.full_username(false))),
             ]);
-            bot.send_message(chat_id, text)
-                .parse_mode(teloxide::types::ParseMode::Html)
-                .await?;
+            send_html_to_target(bot, chat_id, background_thread_id, text).await?;
         }
         return Ok(());
     }
@@ -411,9 +491,7 @@ async fn run_pidor_game(
 
     if last_day && is_manual {
         let announcement = LOCALE.t_fmt(lang, "pidor.static.year_announcement", &[("year", &cur_year.to_string())]);
-        bot.send_message(chat_id, &announcement)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        send_html_to_target(bot, chat_id, background_thread_id, announcement).await?;
     }
     
     if !is_manual {
@@ -423,16 +501,16 @@ async fn run_pidor_game(
             PidorRunKind::Autorun(PidorAutorunSlot::Day) => "pidor.static.sudden_day",
             PidorRunKind::Autorun(PidorAutorunSlot::Evening) => "pidor.static.sudden_evening",
         };
-        bot.send_message(chat_id, LOCALE.t(lang, key)).await?;
+        send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t(lang, key)).await?;
     }
     
-    bot.send_message(chat_id, LOCALE.t_rand(lang, "pidor.stage1")).await?;
+    send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t_rand(lang, "pidor.stage1")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
-    bot.send_message(chat_id, LOCALE.t_rand(lang, "pidor.stage2")).await?;
+    send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t_rand(lang, "pidor.stage2")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
-    bot.send_message(chat_id, LOCALE.t_rand(lang, "pidor.stage3")).await?;
+    send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t_rand(lang, "pidor.stage3")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
     let mut stage4_text = LOCALE.t_rand_fmt(lang, "pidor.stage4", &[
@@ -449,18 +527,28 @@ async fn run_pidor_game(
         stage4_text = stage4_text.replace("пидором дня", &format!("пидором {}", slot_name));
         stage4_text = stage4_text.replace("пидор дня", &format!("пидор {}", slot_name));
     }
-    bot.send_message(chat_id, stage4_text)
-        .parse_mode(teloxide::types::ParseMode::Html)
-        .await?;
+    send_html_to_target(bot, chat_id, background_thread_id, stage4_text).await?;
 
     // Achievements only for "Pidor of the Day" (manual run).
     if is_manual {
         if let Some((_user, count)) = game::stats_personal(pool, game.id, winner.id).await? {
             if count == 1 && achievements::grant(pool, winner.id, "first_pidor_win").await? {
-                bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.first_pidor_win")).await?;
+                send_text_to_target(
+                    bot,
+                    chat_id,
+                    background_thread_id,
+                    LOCALE.t(lang, "achievements.notifications.first_pidor_win"),
+                )
+                .await?;
             }
             if count >= 3 && achievements::grant(pool, winner.id, "three_pidor_wins").await? {
-                bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.three_wins")).await?;
+                send_text_to_target(
+                    bot,
+                    chat_id,
+                    background_thread_id,
+                    LOCALE.t(lang, "achievements.notifications.three_wins"),
+                )
+                .await?;
             }
         }
         let prev_dt = current_datetime_kyiv() - Duration::days(1);
@@ -471,11 +559,23 @@ async fn run_pidor_game(
             && prev_res.winner_id == winner.id
             && achievements::grant(pool, winner.id, "pidor_series_2").await?
         {
-            bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.series_2")).await?;
+            send_text_to_target(
+                bot,
+                chat_id,
+                background_thread_id,
+                LOCALE.t(lang, "achievements.notifications.series_2"),
+            )
+            .await?;
         }
         let hour = current_dt.hour();
         if (0..6).contains(&hour) && achievements::grant(pool, winner.id, "night_pidor").await? {
-            bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.night_pidor")).await?;
+            send_text_to_target(
+                bot,
+                chat_id,
+                background_thread_id,
+                LOCALE.t(lang, "achievements.notifications.night_pidor"),
+            )
+            .await?;
         }
     }
 
@@ -496,9 +596,7 @@ async fn run_pidor_game(
             LOCALE.t(lang, "bet.winners_suffix_one")
         };
         let text = LOCALE.t_fmt(lang, "bet.winners", &[("suffix", suffix), ("names", &joined)]);
-        bot.send_message(chat_id, text)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
+        send_html_to_target(bot, chat_id, background_thread_id, text).await?;
 
         for bet in &correct_bets {
             // Award pidor_elo for correct bet.
@@ -507,17 +605,41 @@ async fn run_pidor_game(
             if let Some(uid) = crate::db::duel::user_id_by_tg_id(pool, bet.bettor_tg_id).await? {
                 let total_correct = crate::db::bet::count_correct_bets(pool, chat_id_raw, bet.bettor_tg_id).await?;
                 if total_correct >= 1 && achievements::grant(pool, uid, "bet_correct_1").await? {
-                    bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.bet_correct_1")).await?;
+                    send_text_to_target(
+                        bot,
+                        chat_id,
+                        background_thread_id,
+                        LOCALE.t(lang, "achievements.notifications.bet_correct_1"),
+                    )
+                    .await?;
                 }
                 if total_correct >= 3 && achievements::grant(pool, uid, "bet_correct_3").await? {
-                    bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.bet_correct_3")).await?;
+                    send_text_to_target(
+                        bot,
+                        chat_id,
+                        background_thread_id,
+                        LOCALE.t(lang, "achievements.notifications.bet_correct_3"),
+                    )
+                    .await?;
                 }
                 if bet.bettor_tg_id == bet.target_tg_id && achievements::grant(pool, uid, "bet_self_correct").await? {
-                    bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.bet_self_correct")).await?;
+                    send_text_to_target(
+                        bot,
+                        chat_id,
+                        background_thread_id,
+                        LOCALE.t(lang, "achievements.notifications.bet_self_correct"),
+                    )
+                    .await?;
                 }
                 let streak = crate::db::bet::count_correct_streak(pool, chat_id_raw, bet.bettor_tg_id).await?;
                 if streak >= 3 && achievements::grant(pool, uid, "bet_streak_3").await? {
-                    bot.send_message(chat_id, LOCALE.t(lang, "achievements.notifications.bet_streak_3")).await?;
+                    send_text_to_target(
+                        bot,
+                        chat_id,
+                        background_thread_id,
+                        LOCALE.t(lang, "achievements.notifications.bet_streak_3"),
+                    )
+                    .await?;
                 }
             }
         }
