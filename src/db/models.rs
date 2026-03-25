@@ -210,9 +210,12 @@ pub struct Huya {
     pub atk_boost:  i32,
     pub def_boost:  i32,
     pub grow_boost: i32,
+    pub steal_boost: i32,
     // Pet energy (for /huyapet friend petting)
     pub pet_energy_left: i32,
     pub pet_energy_reset_at: NaiveDate,
+    pub energy_buys_today: i32,
+    pub energy_buys_reset_at: NaiveDate,
 }
 
 impl Huya {
@@ -226,9 +229,11 @@ impl Huya {
         self.length_mm < 0
     }
 
-    /// Maximum HP: base 100 + 15 per skill_balls level + 15% per skill_eternal level.
+    /// Maximum HP scales with build size and defensive skills.
+    /// This reduces one-shot risk in both normal fights and raids.
     pub fn max_hp(&self) -> i32 {
-        let base = 100 + self.skill_balls * 15;
+        let length_hp = self.length_mm.abs() / 5;
+        let base = 100 + length_hp + self.skill_balls * 15;
         let eternal_mult = 1.0 + self.skill_eternal as f64 * 0.15;
         (base as f64 * eternal_mult) as i32
     }
@@ -300,7 +305,33 @@ pub struct HuyaInventoryItem {
     pub chat_id: i64,
     pub tg_id: i64,
     pub item_id: String,
+    pub rarity: String,
+    pub item_kind: String,
+    pub slot: Option<String>,
+    pub trait_name: Option<String>,
+    pub roll: i32,
+    pub charges: i32,
+    pub sell_price_mm: i32,
+    pub booster_effect: Option<String>,
+    pub booster_value: i32,
+    pub booster_scope: Option<String>,
+    pub socket_capacity: i32,
+    pub reforge_level: i32,
     pub acquired_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaSocketedGem {
+    pub id: i32,
+    pub chat_id: i64,
+    pub tg_id: i64,
+    pub item_inventory_id: i32,
+    pub socket_index: i32,
+    pub gem_item_id: String,
+    pub gem_trait: Option<String>,
+    pub gem_roll: i32,
+    pub gem_rarity: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

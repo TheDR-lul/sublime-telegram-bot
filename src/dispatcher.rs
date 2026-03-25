@@ -11,6 +11,7 @@ use teloxide::utils::command::BotCommands;
 
 use crate::config::Config;
 use crate::error::AppError;
+use crate::alerts;
 use crate::handlers::{
     about, achievements as achievements_handler, commands::Cmd, game::commands as game,
     game::duel as game_duel, huya as huya_handler, meme, misc,
@@ -31,6 +32,9 @@ async fn check_rate_limit(
 }
 
 async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Message) -> bool {
+    fn is_command_text(msg: &teloxide::types::Message) -> bool {
+        msg.text().map(|t| t.trim_start().starts_with('/')).unwrap_or(false)
+    }
     // Non-supergroups (private chats, basic groups) — always allowed.
     if !msg.chat.is_supergroup() {
         return true;
@@ -39,6 +43,11 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
     // Allow only /menu outside enabled topics, and only for chat admins.
     if let Some(text) = msg.text() {
         let t = text.trim();
+        // Shop must be reachable reliably even when topic routing is configured.
+        // This prevents silent drops in mixed supergroup/forum setups.
+        if t.starts_with("/huyashop") {
+            return true;
+        }
         if t.starts_with("/menu") {
             let user_id = msg.from.as_ref().map(|u| u.id.0);
             return match user_id {
@@ -61,6 +70,13 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
                 chat_id,
                 err
             );
+            if is_command_text(msg) {
+                let _ = alerts::notify(
+                    pool,
+                    &format!("drop:is_topic_allowed count_enabled_topics failed chat_id={chat_id} err={err:?}"),
+                )
+                .await;
+            }
             return false;
         }
     }
@@ -76,7 +92,16 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
         Some(id) => i64::from(id.0 .0),
         // In supergroups with topic routing enabled, commands from General/no-thread
         // must not run (except service commands handled above).
-        None => return false,
+        None => {
+            if is_command_text(msg) {
+                let _ = alerts::notify(
+                    pool,
+                    &format!("drop:is_topic_allowed no thread_id chat_id={chat_id} text={:?}", msg.text()),
+                )
+                .await;
+            }
+            return false;
+        }
     };
 
     match chat_topics::is_topic_enabled(pool, chat_id, thread_id).await {
@@ -88,6 +113,13 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
                 thread_id,
                 err
             );
+            if is_command_text(msg) {
+                let _ = alerts::notify(
+                    pool,
+                    &format!("drop:is_topic_allowed is_topic_enabled failed chat_id={chat_id} topic_id={thread_id} err={err:?}"),
+                )
+                .await;
+            }
             false
         }
     }
@@ -140,14 +172,57 @@ async fn callback_router(
     if data.starts_with("huya_fm:") {
         return huya_handler::huya_fight_move_callback(bot, query, pool).await;
     }
+    if data.starts_with("huya_ra:") {
+        return huya_handler::huya_raid_accept_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_rd:") {
+        return huya_handler::huya_raid_decline_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_rj:") {
+        return huya_handler::huya_raid_join_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_rk:") {
+        return huya_handler::huya_raid_kick_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_ro:") {
+        return huya_handler::huya_raid_override_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_rx:") {
+        return huya_handler::huya_raid_disband_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_rs:") {
+        return huya_handler::huya_raid_start_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_rt:") {
+        return huya_handler::huya_raid_turn_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_rf:") {
+        return huya_handler::huya_raid_focus_callback(bot, query, pool).await;
+    }
     if data.starts_with("huya_skill_page:") {
         return huya_handler::huya_skill_page_callback(bot, query, pool).await;
     }
     if data.starts_with("huya_skill:") {
         return huya_handler::huya_skill_callback(bot, query, pool).await;
     }
-    if data.starts_with("huya_buy:") {
+    if data.starts_with("huya_buy:") || data.starts_with("huya_shop_view:") {
         return huya_handler::huya_buy_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_chest_buy:") || data.starts_with("huya_chest_open:")
+        || data == "huya_chest_daily" || data.starts_with("huya_chest_menu:")
+        || data.starts_with("huya_shop_menu:")
+    {
+        return huya_handler::huya_chest_callback(bot, query, pool).await;
+    }
+    if data.starts_with("huya_inv_page:") || data.starts_with("huya_inv_view:")
+        || data.starts_with("huya_inv_equip:")
+        || data.starts_with("huya_inv_unequip:") || data.starts_with("huya_inv_sell:")
+        || data.starts_with("huya_inv_use:")
+        || data.starts_with("huya_inv_socket_pick:") || data.starts_with("huya_inv_socket_do:")
+        || data.starts_with("huya_inv_reforge_pick:") || data.starts_with("huya_inv_reforge_do:")
+        || data == "huya_noop"
+    {
+        return huya_handler::huya_inventory_callback(bot, query, pool).await;
     }
     match data {
         "meme_en_refresh" => meme::meme_refresh_callback(bot, query).await,
@@ -218,9 +293,12 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Huyagrow => huya_handler::huya_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyafight(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyasteal(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyaraid(_) => huya_handler::huya_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyatop => huya_handler::huyatop_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyaskills => huya_handler::huyaskills_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyashop => huya_handler::huyashop_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyachest => huya_handler::huyachest_handler(bot, msg, cmd, pool).await,
+                        Cmd::Huyainv => huya_handler::huyainv_handler(bot, msg, cmd, pool).await,
                         Cmd::Huyapet(_) => huya_handler::huyapet_handler(bot, msg, cmd, pool).await,
                         Cmd::Bothere => misc::bothere_handler(bot, msg, cmd, pool).await,
                         Cmd::Bothereoff => misc::bothereoff_handler(bot, msg, cmd, pool).await,
@@ -304,6 +382,9 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         .branch(case![Cmd::Huyasteal(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             huya_handler::huya_handler(bot, msg, cmd, pool).await
         }))
+        .branch(case![Cmd::Huyaraid(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huya_handler(bot, msg, cmd, pool).await
+        }))
         .branch(case![Cmd::Huyatop].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             huya_handler::huyatop_handler(bot, msg, cmd, pool).await
         }))
@@ -312,6 +393,12 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         }))
         .branch(case![Cmd::Huyashop].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             huya_handler::huyashop_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyachest].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huyachest_handler(bot, msg, cmd, pool).await
+        }))
+        .branch(case![Cmd::Huyainv].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
+            huya_handler::huyainv_handler(bot, msg, cmd, pool).await
         }))
         .branch(case![Cmd::Huyapet(_s)].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             huya_handler::huyapet_handler(bot, msg, cmd, pool).await
@@ -370,6 +457,9 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
             {
                 return commands::pidoryear_handler(bot, msg, year, pool).await;
             }
+            if let Some(text) = msg.text() && text.trim().starts_with("/huyashop") {
+                return huya_handler::huyashop_handler(bot, msg, Cmd::Huyashop, pool).await;
+            }
             Ok(())
         }))
 }
@@ -378,17 +468,33 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
 /// Dependencies (pool, config) must be injected via Dispatcher::dependencies / MockBot::dependencies.
 pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     let schema = message_schema();
-    let callback_schema = Update::filter_callback_query()
-        .endpoint(|bot: Bot, query: CallbackQuery, pool: PgPool, config: Config| async move {
-            let data = query.data.clone();
-            if let Err(e) = callback_router(bot, query, pool, config).await {
-                tracing::error!(
-                    "Callback error (data: {:?}): {:?}",
-                    data,
-                    e
-                );
+    let raw_message_schema = Update::filter_message().endpoint(
+        |bot: Bot, msg: Message, pool: PgPool| async move {
+            let Some(text) = msg.text() else {
+                return Ok(());
+            };
+            let t = text.trim();
+            if t.starts_with("/huyashop") {
+                return huya_handler::huyashop_handler(bot, msg, Cmd::Huyashop, pool).await;
+            }
+            if t.starts_with('/') {
+                let _ = alerts::notify(
+                    &pool,
+                    &format!(
+                        "drop:unparsed command chat_id={} supergroup={} text={:?}",
+                        msg.chat.id.0,
+                        msg.chat.is_supergroup(),
+                        t
+                    ),
+                )
+                .await;
             }
             Ok(())
+        },
+    );
+    let callback_schema = Update::filter_callback_query()
+        .endpoint(|bot: Bot, query: CallbackQuery, pool: PgPool, config: Config| async move {
+            callback_router(bot, query, pool, config).await
         });
 
     let inline_schema = Update::filter_inline_query()
@@ -462,6 +568,7 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
 
     dptree::entry()
         .branch(schema)
+        .branch(raw_message_schema)
         .branch(callback_schema)
         .branch(inline_schema)
         .branch(chat_member_schema)

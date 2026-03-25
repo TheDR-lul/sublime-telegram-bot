@@ -684,6 +684,72 @@ steal_no_target = "Укажи цель: /huya steal @user или ответом 
 steal_self    = "🤦 <b>{name}</b> попытался украсть у себя и засунул себе хуяку в жопу... -0.5 см. Теперь: {new_size} см"
 steal_self_bot = "🤖 Бот не хранит хуяку. Иди к людям."
 
+# Рейд (пати до 5 vs 1 цель)
+# {leader} {target} {raid_id}
+raid_challenge = "🧨 <b>{leader}</b> открывает рейд на <b>{target}</b>!\nID рейда: <code>{raid_id}</code>\n\nЦель должна принять вызов, после чего пати может добраться до 5 игроков."
+raid_no_target = "Укажи цель: /huyaraid @user или ответом на сообщение."
+raid_self = "Самого себя рейдить нельзя."
+raid_already_live = "В этом чате уже есть активный или формирующийся рейд."
+raid_target_cooldown = "Эту цель недавно уже рейдили. Дай передышку и попробуй позже."
+raid_target_no_actions = "У цели нет действий на сегодня, рейд сейчас недоступен."
+raid_accept_btn = "⚔️ Принять рейд"
+raid_decline_btn = "🚫 Отклонить"
+raid_join_btn = "➕ Вступить в пати"
+raid_start_btn = "🚀 Старт рейда"
+raid_target_yes = "да"
+raid_target_no = "нет"
+# {target} {accepted} {party_count} {party_list} {party_power} {target_power} {power_limit}
+raid_lobby = "🏕️ <b>Лобби рейда</b>\nЦель: <b>{target}</b>\nПодтверждение цели: <b>{accepted}</b>\nИгроков в пати: <b>{party_count}/5</b>\nМощь пати: <b>{party_power}</b>\nМощь цели: <b>{target_power}</b>\nЛимит старта: <b>{power_limit}</b>\n\n{party_list}"
+raid_declined = "Рейд отклонён целью."
+raid_joined = "Ты в пати рейда."
+raid_join_failed = "Не удалось вступить (возможно, рейд уже стартовал или пати заполнена)."
+raid_kick_btn = "🦵 Кик id:{tg_id}"
+raid_kick_success = "Игрок кикнут из пати."
+raid_kick_fail = "Не удалось кикнуть игрока."
+raid_disband_btn = "🧹 Распустить лобби"
+raid_disband_success = "Лобби рейда распущено."
+raid_disband_fail = "Не удалось распустить лобби."
+raid_override_btn = "✅ Одобрить перевес"
+raid_override_only_target = "Только цель рейда может это нажать."
+raid_override_success = "Цель одобрила старт даже при перевесе."
+raid_override_fail = "Не удалось применить одобрение перевеса."
+raid_only_leader = "Стартовать рейд может только лидер."
+# {party_power} {target_power}
+raid_power_fail = "Пати слишком сильная: мощь пати {party_power}, мощь цели {target_power}. Пати может быть максимум на 15% сильнее цели, если цель не одобрит перевес."
+raid_start_failed = "Не удалось стартовать рейд. Проверь состав и подтверждение цели."
+# {round} {actor}
+raid_started = "⚔️ Рейд начался! Раунд {round}.\nСейчас ходит: <b>{actor}</b>"
+raid_not_your_turn = "Сейчас не твой ход."
+# {round} {actor} {log}
+raid_turn_header = "Раунд {round}\nХод: {actor}\n{log}"
+raid_status_header = "Статус участников:"
+raid_winner_party = "🏆 Победа пати!"
+raid_winner_target = "👑 Цель отбилась и победила."
+raid_draw = "🤝 Рейд завершился вничью."
+# {steal_cm}
+raid_steal_pool = "Пати утащила суммарно {steal_cm} см."
+
+# Сундуки
+# {size}
+chest_menu = """🧰 <b>Сундуки хуяки</b>
+
+Текущая длина: <b>{size} см</b>
+
+Покупай сундуки, открывай лут, забирай daily халяву."""
+# {chest}
+chest_bought = "✅ Куплен сундук: <b>{chest}</b>. Нажми «Открыть»."
+chest_open_toast = "Лут: {item}"
+chest_open_lines = [
+  "🎉 Выпало: <b>{item}</b>  |  редкость: <b>{rarity}</b>  |  трейт: <b>{trait}</b>",
+  "🧪 Сундук щёлкнул... и дал <b>{item}</b> ({rarity}), трейт: {trait}",
+  "📦 Дроп: <b>{item}</b>. Редкость: {rarity}. Особенность: {trait}"
+]
+# {left} {center} {right}
+chest_spin_frame = "🎰 <b>Открытие сундука...</b>\n\n{left}  |  <b>{center}</b>  |  {right}\n\nКрутим рулетку лута..."
+chest_daily_claimed = "Daily сундук получен!"
+chest_daily_cooldown = "Daily ещё не готов. Осталось: {remaining}"
+
+# ── HuyActa limit/top/shop blocks ─────────────────────────────
 # Лимит
 no_actions   = "❤️ Действий на сегодня не осталось. Возвращайся завтра!"
 
@@ -756,18 +822,91 @@ buy_btn_potion     = "💊 Зелье"
 buy_btn_adrenaline = "⚡ Адреналин"
 buy_btn_armor      = "🛡 Броня"
 buy_btn_steroid    = "💉 Стероид"
-buy_btn_energy     = "🔋 Энергетик"
+buy_btn_energy_small = "🔋 Small BDE"
+buy_btn_energy_big   = "🚀 Big Dick Energy"
 
 # {hp} {max_hp}
 buy_success_potion     = "💊 Зелье выпито! +50 HP. Сейчас: {hp}/{max_hp}"
 buy_success_adrenaline = "⚡ Адреналин влит! ATK +35% на следующий файт."
 buy_success_armor      = "🛡 Броня надета! DEF -35% на следующий файт."
 buy_success_steroid    = "💉 Стероид введён! Следующий рост ×2."
-buy_success_energy     = "🔋 Энергетик выпит! +1 действие."
+buy_success_energy_small = "🔋 Small BDE куплен в инвентарь. Цена: {cost} см. Даёт +1 действие при использовании."
+buy_success_energy_big   = "🚀 Big Dick Energy куплен в инвентарь. Цена: {cost} см. Даёт +3 действия при использовании."
+
+shop_energy_header = """🏪 <b>Магазин хуяк — Энергия</b>
+
+Твоя длина: <b>{size} см</b>
+Покупок энергии сегодня: <b>{buys_today}</b>
+
+🔋 Small BDE: <b>{small_cost} см</b> (в инвентарь, +1 действие)
+🚀 Big Dick Energy: <b>{big_cost} см</b> (в инвентарь, +3 действия)
+
+Чем больше покупаешь за день — тем дороже следующая банка.
+"""
 
 # {cost} {size}
 buy_fail_broke   = "❌ Мало длины! Нужно {cost} см, у тебя {size} см."
 buy_fail_unknown = "❌ Неизвестный предмет."
+
+[huya.rarity]
+trash = "мусор"
+common = "обычный"
+rare = "редкий"
+epic = "эпический"
+legendary = "легендарный"
+
+[huya.chest_name]
+cheap_crate = "Дешман-ящик"
+fighter_crate = "Бойцовский сундук"
+royal_crate = "Царский сундук"
+daily_free_crate = "Daily сундук"
+
+[huya.item]
+ring_plastic = "Пластиковое кольцо"
+ring_tape = "Скотч-манжета"
+cage_cheap = "Простая клетка"
+tip_condom_plus = "Насадка «Безопасный тычок»"
+ring_spiked = "Шипастое кольцо"
+cage_iron = "Железная клетка"
+tip_vamp = "Вамп-насадка"
+balls_dyn = "Динамо-яйца"
+ring_legend_halo = "Легендарный ореол"
+piercing_tip_silver = "Серебряный пирсинг (головка)"
+piercing_shaft_chain = "Цепной пирсинг (ствол)"
+piercing_base_anchor = "Анкерный пирсинг (основание)"
+gem_ruby_fury = "Рубин ярости"
+gem_sapphire_wall = "Сапфир стены"
+gem_emerald_snatch = "Изумруд кражи"
+gem_topaz_haste = "Топаз спешки"
+gem_obsidian_thorns = "Обсидиан шипов"
+booster_rage_syrup = "Сироп ярости"
+booster_steal_grease = "Смазка ворюги"
+booster_growth_cream = "Крем роста"
+booster_energy_small = "Small BDE"
+booster_energy_big = "Big Dick Energy"
+
+[huya.trait]
+jittery = "дрожь"
+sticky = "липучка"
+cage_guard = "клеточная защита"
+safe_poke = "безопасный тычок"
+spiked_ring_reflect = "шипы-рефлект"
+anti_burst = "анти-бурст"
+blood_taste = "вкус крови"
+raid_initiative = "инициатива рейда"
+eternal_echo = "эхо вечности"
+tip_focus = "фокус острия"
+shaft_grip = "хват ствола"
+base_anchor = "якорь у основания"
+gem_atk = "гем атаки"
+gem_def = "гем защиты"
+gem_steal = "гем кражи"
+gem_initiative = "гем инициативы"
+gem_reflect = "гем отражения"
+rage = "ярость"
+grease = "смазка"
+growth = "рост"
+energy = "энергия"
 
 # ── Снаряжение хуяки (инвентарь) ──────────────────────────────────────────────
 
@@ -805,17 +944,20 @@ balls_fate_name  = "✨ Яйца Судьбы"
 balls_fate_desc  = "+20% XP за действия. Очень редкий дроп."
 
 [huya.inventory]
-header = """🎒 <b>Инвентарь {name}</b>
-
-Хуяка: <b>{size} см</b>
-Предметов: <b>{count}</b>
-
-Нажми на предмет, чтобы надеть или продать."""
+header = "🎒 <b>Инвентарь</b>\n\nНажми на предмет, чтобы экипировать, использовать бустер или продать."
 empty  = "Инвентарь пуст. Зайди в /huyashop или лутай кольца в боях."
 equip_btn = "Надеть"
 unequip_btn = "Снять"
 sell_btn = "Продать (-30%)"
-equip_success = "✅ {item} экипирован в слот {slot}."
-unequip_success = "✅ Слот {slot} освобождён."
-sell_success = "💸 Ты продал {item} и потерял {cost_cm} см длины (возврат 30%)."
+equip_success = "✅ Предмет экипирован."
+unequip_success = "✅ Слот освобождён."
+sell_success = "💸 Продано: {item}. Получено: {refund} см."
 equip_fail = "❌ Нельзя экипировать этот предмет."
+use_success = "⚡ Бустер активирован: {effect} +{value}"
+use_fail = "❌ Этот бустер использовать нельзя."
+no_gems = "❌ Нужны гемы в инвентаре."
+socket_success = "💎 Гем успешно инкрустирован."
+socket_fail = "❌ Инкрустация не удалась (слоты/предмет/гем не подходят)."
+reforge_success = "🔥 Перековка успешна: roll {old} → {new}"
+reforge_fail = "🧯 Перековка не удалась. Катализатор сгорел."
+reforge_crit_fail = "💥 Крит-фейл перековки: предмет рассыпался."

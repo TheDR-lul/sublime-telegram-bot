@@ -19,3 +19,23 @@ WHERE version = 20260305000007;
 -- Fix VersionMismatch for 20260310000008_chat_topics.sql.
 -- Simplest fix: delete the old row so sqlx inserts a fresh one with correct checksum on next migrate.
 DELETE FROM _sqlx_migrations WHERE version = 20260310000008;
+
+-- Fix VersionMismatch for 20260324000100_huya_raid.sql (SHA384 of current file).
+UPDATE _sqlx_migrations
+SET checksum = decode('b87762e8007c04d19c716730ff4288205cae05d36878cd17740cfbc85ab59e87ce5c60b640e00649c3618be61a013d05', 'hex')
+WHERE version = 20260324000100;
+
+-- Fix VersionMismatch for 20260324000200_huya_chests.sql (SHA384 of current file).
+UPDATE _sqlx_migrations
+SET checksum = decode('a99df030da51de3a8f9a1a68af3183d770fae8ada62d29785282944181064a781730f2930f6fd53c8c70c94bd65e1906', 'hex')
+WHERE version = 20260324000200;
+
+-- Fix VersionMismatch for 20260324000300_huya_gems_reforge.sql (SHA384 of current file).
+UPDATE _sqlx_migrations
+SET checksum = decode('7176534fce01748dd026347ee8018e42c7b64aa0a87c0ba28d698323517c6e350ec3f1406b3f36d58bb9a5577afae282', 'hex')
+WHERE version = 20260324000300;
+
+-- Fix VersionMismatch for 20260324000400_huya_raid_timer_and_energy.sql (SHA384 of current file).
+-- Most robust fix: remove the row so the migration can be applied again.
+-- The migration itself is idempotent (uses IF NOT EXISTS).
+DELETE FROM _sqlx_migrations WHERE version = 20260324000400;

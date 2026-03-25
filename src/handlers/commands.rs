@@ -59,12 +59,18 @@ pub enum Cmd {
     Huyafight(String),
     #[command(description = "steal from another player's dick")]
     Huyasteal(String),
+    #[command(description = "raid a strong player with a party")]
+    Huyaraid(String),
     #[command(description = "dick leaderboard")]
     Huyatop,
     #[command(description = "skill tree for your dick")]
     Huyaskills,
     #[command(description = "shop for dick items and boosters")]
     Huyashop,
+    #[command(description = "open gacha chests")]
+    Huyachest,
+    #[command(description = "inventory and equipment")]
+    Huyainv,
     #[command(description = "tamagotchi dick game status")]
     Huya(String),
     #[command(description = "enable bot in this topic (admins only, forums)")]

@@ -1,6 +1,8 @@
 //! Entry: clap dispatch to run / config / migrate / commands.
 
 use clap::Parser;
+use sublime::alerts;
+use sublime::db::kv;
 use sublime::{cli::*, config::Config, error::AppError};
 use std::io::{self, Write};
 use teloxide::prelude::Requester;
@@ -8,6 +10,12 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
+    // Important: if we panic before tracing/pool init, we still want Docker logs.
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::capture();
+        eprintln!("panic (pre-init): {info}\nbacktrace:\n{bt}");
+    }));
+
     let cli = Cli::parse();
 
     match cli.subcommand {
@@ -48,6 +56,17 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         .await?;
 
     let bot = teloxide::Bot::new(&cfg.telegram_token);
+
+    let panic_pool = pool.clone();
+    std::panic::set_hook(Box::new(move |info| {
+        let pool = panic_pool.clone();
+        let bt = std::backtrace::Backtrace::capture();
+        let msg = format!("panic in main bot: {info}\nbacktrace:\n{bt}");
+        eprintln!("{msg}");
+        tokio::spawn(async move {
+            let _ = alerts::notify(&pool, &msg).await;
+        });
+    }));
 
     let full_schema = sublime::dispatcher::build_schema();
 
@@ -98,11 +117,17 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
 
     let locale = std::sync::Arc::new(sublime::i18n::Locale::new());
 
+    let error_pool = pool.clone();
     let mut disp = teloxide::dispatching::Dispatcher::builder(bot.clone(), full_schema)
         .dependencies(teloxide::dptree::deps![pool, cfg, pidorscan_dedup, rate_limiter, locale])
-        .error_handler(teloxide::error_handlers::LoggingErrorHandler::with_custom_text(
-            "Handler error (command or callback failed)",
-        ))
+        .error_handler(std::sync::Arc::new(move |err: AppError| {
+            let pool = error_pool.clone();
+            async move {
+                tracing::error!("Handler error (command or callback failed): {:?}", err);
+                let text = format!("handler error: {:?}", err);
+                let _ = alerts::notify(&pool, &text).await;
+            }
+        }))
         .enable_ctrlc_handler()
         .build();
 
@@ -232,9 +257,12 @@ async fn run_commands_set(config_path: Option<std::path::PathBuf>) -> Result<(),
         BotCommand::new("huyagrow", "grow your dick"),
         BotCommand::new("huyafight", "fight another player (@user or reply)"),
         BotCommand::new("huyasteal", "steal from another player (@user or reply)"),
+        BotCommand::new("huyaraid", "raid with up to 5 players (@user or reply)"),
         BotCommand::new("huyatop", "dick leaderboard"),
         BotCommand::new("huyaskills", "skill tree for your dick"),
         BotCommand::new("huyashop", "shop: items & boosters for length"),
+        BotCommand::new("huyachest", "open chests with random loot"),
+        BotCommand::new("huyainv", "inventory and equipment"),
         BotCommand::new("huyapet", "pet a friend's dick (@user or reply)"),
     ];
     let bot = teloxide::Bot::new(&cfg.telegram_token);
@@ -265,6 +293,7 @@ async fn run_watchdog_commands_set() -> Result<(), AppError> {
         BotCommand::new("status", "is main bot running"),
         BotCommand::new("stats", "chats and users count"),
         BotCommand::new("huyaenergy", "toggle Huya energy limit (on/off/status)"),
+        BotCommand::new("alerts", "alerts control (me/on/off/status/test)"),
     ];
     bot.set_my_commands(commands.clone())
         .scope(BotCommandScope::Default)
@@ -410,8 +439,6 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
         msg: Message,
         pool: Option<sqlx::PgPool>,
     ) -> Result<(), AppError> {
-        use sublime::db::kv;
-
         let pool = if let Some(p) = pool {
             p
         } else {
@@ -469,6 +496,84 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
         Ok(())
     }
 
+    fn is_private_chat(msg: &Message) -> bool {
+        msg.chat.is_private()
+    }
+
+    async fn alerts_handler(
+        bot: teloxide::Bot,
+        msg: Message,
+        pool: Option<sqlx::PgPool>,
+    ) -> Result<(), AppError> {
+        let pool = if let Some(p) = pool {
+            p
+        } else {
+            bot.send_message(msg.chat.id, "БД недоступна (не задан DATABASE_URL).").await?;
+            return Ok(());
+        };
+        if !is_private_chat(&msg) {
+            bot.send_message(msg.chat.id, "Команда доступна только в личке второго бота.").await?;
+            return Ok(());
+        }
+
+        let from_id = match msg.from.as_ref() {
+            Some(u) => u.id.0 as i64,
+            None => {
+                bot.send_message(msg.chat.id, "Не удалось определить пользователя.").await?;
+                return Ok(());
+            }
+        };
+        let text = msg.text().unwrap_or("").trim();
+        let mut parts = text.split_whitespace();
+        let _cmd = parts.next();
+        let arg = parts.next().unwrap_or("status");
+
+        match arg {
+            "me" => {
+                kv::set(&pool, 0, "watchdog_alerts_recipient_tg_id", &from_id.to_string()).await?;
+                kv::set(&pool, 0, "watchdog_alerts_enabled", "1").await?;
+                bot.send_message(msg.chat.id, "Алерты привязаны к тебе и включены.").await?;
+            }
+            "on" => {
+                kv::set(&pool, 0, "watchdog_alerts_enabled", "1").await?;
+                bot.send_message(msg.chat.id, "Алерты включены.").await?;
+            }
+            "off" => {
+                kv::set(&pool, 0, "watchdog_alerts_enabled", "0").await?;
+                bot.send_message(msg.chat.id, "Алерты выключены.").await?;
+            }
+            "test" => {
+                let target = kv::get(&pool, 0, "watchdog_alerts_recipient_tg_id")
+                    .await?
+                    .and_then(|x| x.value.parse::<i64>().ok())
+                    .unwrap_or(from_id);
+                bot.send_message(
+                    teloxide::types::ChatId(target),
+                    "Тест алерта: доставка работает.",
+                )
+                .await?;
+                bot.send_message(msg.chat.id, "Тест отправлен.").await?;
+            }
+            _ => {
+                let enabled = kv::get(&pool, 0, "watchdog_alerts_enabled")
+                    .await?
+                    .map(|x| x.value == "1")
+                    .unwrap_or(false);
+                let target = kv::get(&pool, 0, "watchdog_alerts_recipient_tg_id")
+                    .await?
+                    .and_then(|x| x.value.parse::<i64>().ok())
+                    .unwrap_or(0);
+                let status = if enabled { "ВКЛ" } else { "ВЫКЛ" };
+                bot.send_message(
+                    msg.chat.id,
+                    format!("Алерты: {status}\nПолучатель tg_id: {target}\nКоманды: /alerts me|on|off|status|test"),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     use teloxide::dispatching::UpdateFilterExt;
     use teloxide::types::Update;
     let container_clone = container.clone();
@@ -484,6 +589,8 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
                         || t.eq_ignore_ascii_case("stats")
                         || t.starts_with("/huyaenergy")
                         || t.eq_ignore_ascii_case("huyaenergy")
+                        || t.starts_with("/alerts")
+                        || t.eq_ignore_ascii_case("alerts")
                 })
                 .unwrap_or(false)
         })
@@ -497,6 +604,8 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
                     status_handler(bot, msg, container).await
                 } else if trimmed.starts_with("/stats") || trimmed.eq_ignore_ascii_case("stats") {
                     stats_handler(bot, msg, pool).await
+                } else if trimmed.starts_with("/alerts") || trimmed.eq_ignore_ascii_case("alerts") {
+                    alerts_handler(bot, msg, pool).await
                 } else {
                     huyaenergy_handler(bot, msg, pool).await
                 }

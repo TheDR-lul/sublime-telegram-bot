@@ -13,7 +13,7 @@ use rand::RngExt;
 use sqlx::PgPool;
 
 use crate::db::kv;
-use crate::db::models::{Huya, HuyaEquipmentSlot, HuyaInventoryItem};
+use crate::db::models::{Huya, HuyaEquipmentSlot, HuyaInventoryItem, HuyaSocketedGem};
 use crate::error::AppError;
 
 const HUYA_SELECT: &str =
@@ -26,7 +26,9 @@ const HUYA_SELECT: &str =
      skill_eternal, skill_absolute, \
      fights_won, fights_lost, \
      atk_boost, def_boost, grow_boost, \
-     pet_energy_left, pet_energy_reset_at";
+     steal_boost, \
+     pet_energy_left, pet_energy_reset_at, \
+     energy_buys_today, energy_buys_reset_at";
 
 const XP_PER_LEVEL: i32 = 100;
 const LEVEL_UP_BONUS_MM: i32 = 50;
@@ -299,6 +301,8 @@ pub async fn steal_attempt(
 ) -> Result<StealResult, AppError> {
     let (att, _) = get_or_create(pool, chat_id, attacker_tg_id).await?;
     let (tgt, _) = get_or_create(pool, chat_id, target_tg_id).await?;
+    let att_fx = equipment_effects_for_player(pool, chat_id, attacker_tg_id).await.unwrap_or_default();
+    let tgt_fx = equipment_effects_for_player(pool, chat_id, target_tg_id).await.unwrap_or_default();
 
     let att_len = att.length_mm.max(1) as f64;
     let tgt_len = tgt.length_mm.max(1) as f64;
@@ -307,8 +311,12 @@ pub async fn steal_attempt(
     let cunning_bonus = att.skill_cunning as f64 * 0.025;
     let scales_penalty = tgt.skill_scales as f64 * 0.025;
     let eternal_bonus = att.skill_eternal as f64 * 0.15;
+    let booster_bonus = att.steal_boost as f64 * 0.01;
     let chance = (base_chance * (0.5 + 0.5 * parity) + cunning_bonus - scales_penalty + eternal_bonus)
-        .clamp(0.05, 0.85);
+        + att_fx.steal_chance_pct
+        + booster_bonus
+        - tgt_fx.steal_resist_pct;
+    let chance = chance.clamp(0.05, 0.85);
     let chance_pct = (chance * 100.0).round() as u8;
 
     let steal_cap = (tgt_len * 0.28) as i32;
@@ -386,6 +394,13 @@ pub async fn steal_attempt(
         sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE id = $2")
             .bind(backlash_mm).bind(tgt.id).execute(pool).await?;
     }
+    // One steal attempt consumes temporary steal booster.
+    if att.steal_boost > 0 {
+        let _ = sqlx::query("UPDATE huya SET steal_boost = 0 WHERE id = $1")
+            .bind(att.id)
+            .execute(pool)
+            .await;
+    }
 
     let (att_updated, _) = get_or_create(pool, chat_id, attacker_tg_id).await?;
     let (tgt_updated, _) = get_or_create(pool, chat_id, target_tg_id).await?;
@@ -428,13 +443,49 @@ fn ring_slots_for_length(length_mm: i32) -> i32 {
     }
 }
 
+fn unlocked_piercing_slots(length_mm: i32) -> Vec<&'static str> {
+    let len = length_mm.max(0);
+    let mut slots = Vec::new();
+    if len >= 50 {
+        slots.push("piercing_tip_1");
+        slots.push("piercing_shaft_1");
+    }
+    if len >= 120 {
+        slots.push("piercing_base_1");
+    }
+    if len >= 200 {
+        slots.push("piercing_tip_2");
+        slots.push("piercing_shaft_2");
+    }
+    if len >= 300 {
+        slots.push("piercing_base_2");
+    }
+    if len >= 450 {
+        slots.push("piercing_tip_3");
+        slots.push("piercing_shaft_3");
+    }
+    slots
+}
+
+pub fn slot_unlocked_for_length(slot: &str, length_mm: i32) -> bool {
+    if slot.starts_with("ring_") {
+        let requested = slot.trim_start_matches("ring_").parse::<i32>().unwrap_or(99);
+        return requested <= ring_slots_for_length(length_mm);
+    }
+    if slot.starts_with("piercing_") {
+        return unlocked_piercing_slots(length_mm).contains(&slot);
+    }
+    matches!(slot, "tip" | "base" | "balls")
+}
+
 pub async fn get_inventory(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Vec<HuyaInventoryItem>, AppError> {
     let items = sqlx::query_as::<_, HuyaInventoryItem>(
-        "SELECT id, chat_id, tg_id, item_id, acquired_at \
-         FROM huya_inventory WHERE chat_id = $1 AND tg_id = $2 \
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name, \
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope, \
+                socket_capacity, reforge_level, acquired_at \
+         FROM huya_inventory WHERE tg_id = $1 \
          ORDER BY acquired_at DESC, id DESC",
     )
-    .bind(chat_id)
     .bind(tg_id)
     .fetch_all(pool)
     .await?;
@@ -443,10 +494,10 @@ pub async fn get_inventory(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Ve
 
 pub async fn get_equipment(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Vec<HuyaEquipmentSlot>, AppError> {
     let rows = sqlx::query_as::<_, HuyaEquipmentSlot>(
-        "SELECT chat_id, tg_id, slot, inventory_id \
-         FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2",
+        "SELECT DISTINCT ON (slot) chat_id, tg_id, slot, inventory_id \
+         FROM huya_equipment WHERE tg_id = $1 \
+         ORDER BY slot, chat_id DESC",
     )
-    .bind(chat_id)
     .bind(tg_id)
     .fetch_all(pool)
     .await?;
@@ -458,7 +509,9 @@ pub async fn grant_loot(pool: &PgPool, chat_id: i64, tg_id: i64, item_id: &str) 
     let row = sqlx::query_as::<_, HuyaInventoryItem>(
         "INSERT INTO huya_inventory (chat_id, tg_id, item_id) \
          VALUES ($1, $2, $3) \
-         RETURNING id, chat_id, tg_id, item_id, acquired_at",
+         RETURNING id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name, \
+                  roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope, \
+                  socket_capacity, reforge_level, acquired_at",
     )
     .bind(chat_id)
     .bind(tg_id)
@@ -466,6 +519,232 @@ pub async fn grant_loot(pool: &PgPool, chat_id: i64, tg_id: i64, item_id: &str) 
     .fetch_one(pool)
     .await?;
     Ok(row)
+}
+
+#[derive(Clone)]
+pub struct ChestDef {
+    pub id: &'static str,
+    pub price_mm: i32,
+    pub daily_free: bool,
+}
+
+#[derive(Clone)]
+pub struct ItemTemplate {
+    pub id: &'static str,
+    pub rarity: &'static str,
+    pub item_kind: &'static str,
+    pub slot: Option<&'static str>,
+    pub trait_name: Option<&'static str>,
+    pub roll_min: i32,
+    pub roll_max: i32,
+    pub sell_price_mm: i32,
+    pub booster_effect: Option<&'static str>,
+    pub booster_value: i32,
+    pub booster_scope: Option<&'static str>,
+    pub socket_capacity_base: i32,
+    pub weight: i32,
+}
+
+pub fn chest_defs() -> Vec<ChestDef> {
+    vec![
+        ChestDef { id: "cheap_crate", price_mm: 35, daily_free: false },
+        ChestDef { id: "fighter_crate", price_mm: 90, daily_free: false },
+        ChestDef { id: "royal_crate", price_mm: 220, daily_free: false },
+        ChestDef { id: "daily_free_crate", price_mm: 0, daily_free: true },
+    ]
+}
+
+pub fn item_templates() -> Vec<ItemTemplate> {
+    vec![
+        // Trash / common
+        ItemTemplate { id: "ring_plastic", rarity: "trash", item_kind: "equipment", slot: Some("ring"), trait_name: Some("jittery"), roll_min: 1, roll_max: 3, sell_price_mm: 4, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 1, weight: 35 },
+        ItemTemplate { id: "ring_tape", rarity: "trash", item_kind: "equipment", slot: Some("ring"), trait_name: Some("sticky"), roll_min: 1, roll_max: 4, sell_price_mm: 5, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 1, weight: 32 },
+        ItemTemplate { id: "cage_cheap", rarity: "common", item_kind: "equipment", slot: Some("base"), trait_name: Some("cage_guard"), roll_min: 3, roll_max: 8, sell_price_mm: 10, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 1, weight: 24 },
+        ItemTemplate { id: "tip_condom_plus", rarity: "common", item_kind: "equipment", slot: Some("tip"), trait_name: Some("safe_poke"), roll_min: 3, roll_max: 8, sell_price_mm: 11, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 1, weight: 24 },
+        // Rare+
+        ItemTemplate { id: "ring_spiked", rarity: "rare", item_kind: "equipment", slot: Some("ring"), trait_name: Some("spiked_ring_reflect"), roll_min: 6, roll_max: 14, sell_price_mm: 20, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 2, weight: 14 },
+        ItemTemplate { id: "cage_iron", rarity: "rare", item_kind: "equipment", slot: Some("base"), trait_name: Some("anti_burst"), roll_min: 6, roll_max: 15, sell_price_mm: 22, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 2, weight: 12 },
+        ItemTemplate { id: "tip_vamp", rarity: "epic", item_kind: "equipment", slot: Some("tip"), trait_name: Some("blood_taste"), roll_min: 10, roll_max: 20, sell_price_mm: 35, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 3, weight: 8 },
+        ItemTemplate { id: "balls_dyn", rarity: "epic", item_kind: "equipment", slot: Some("balls"), trait_name: Some("raid_initiative"), roll_min: 10, roll_max: 22, sell_price_mm: 36, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 3, weight: 7 },
+        ItemTemplate { id: "ring_legend_halo", rarity: "legendary", item_kind: "equipment", slot: Some("ring"), trait_name: Some("eternal_echo"), roll_min: 18, roll_max: 32, sell_price_mm: 70, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 4, weight: 2 },
+        // Piercing gear
+        ItemTemplate { id: "piercing_tip_silver", rarity: "common", item_kind: "equipment", slot: Some("piercing_tip"), trait_name: Some("tip_focus"), roll_min: 4, roll_max: 10, sell_price_mm: 13, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 1, weight: 14 },
+        ItemTemplate { id: "piercing_shaft_chain", rarity: "rare", item_kind: "equipment", slot: Some("piercing_shaft"), trait_name: Some("shaft_grip"), roll_min: 8, roll_max: 16, sell_price_mm: 25, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 2, weight: 10 },
+        ItemTemplate { id: "piercing_base_anchor", rarity: "epic", item_kind: "equipment", slot: Some("piercing_base"), trait_name: Some("base_anchor"), roll_min: 12, roll_max: 22, sell_price_mm: 38, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 2, weight: 6 },
+        // Gems (consumed by socket/reforge)
+        ItemTemplate { id: "gem_ruby_fury", rarity: "rare", item_kind: "gem", slot: None, trait_name: Some("gem_atk"), roll_min: 5, roll_max: 14, sell_price_mm: 18, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 0, weight: 11 },
+        ItemTemplate { id: "gem_sapphire_wall", rarity: "rare", item_kind: "gem", slot: None, trait_name: Some("gem_def"), roll_min: 5, roll_max: 14, sell_price_mm: 18, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 0, weight: 11 },
+        ItemTemplate { id: "gem_emerald_snatch", rarity: "epic", item_kind: "gem", slot: None, trait_name: Some("gem_steal"), roll_min: 8, roll_max: 18, sell_price_mm: 24, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 0, weight: 7 },
+        ItemTemplate { id: "gem_topaz_haste", rarity: "epic", item_kind: "gem", slot: None, trait_name: Some("gem_initiative"), roll_min: 8, roll_max: 18, sell_price_mm: 25, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 0, weight: 7 },
+        ItemTemplate { id: "gem_obsidian_thorns", rarity: "legendary", item_kind: "gem", slot: None, trait_name: Some("gem_reflect"), roll_min: 10, roll_max: 22, sell_price_mm: 42, booster_effect: None, booster_value: 0, booster_scope: None, socket_capacity_base: 0, weight: 3 },
+        // Boosters
+        ItemTemplate { id: "booster_rage_syrup", rarity: "common", item_kind: "booster", slot: None, trait_name: Some("rage"), roll_min: 0, roll_max: 0, sell_price_mm: 9, booster_effect: Some("atk_boost"), booster_value: 20, booster_scope: Some("next_fight"), socket_capacity_base: 0, weight: 12 },
+        ItemTemplate { id: "booster_steal_grease", rarity: "rare", item_kind: "booster", slot: None, trait_name: Some("grease"), roll_min: 0, roll_max: 0, sell_price_mm: 16, booster_effect: Some("steal_boost"), booster_value: 2, booster_scope: Some("next_steal"), socket_capacity_base: 0, weight: 8 },
+        ItemTemplate { id: "booster_growth_cream", rarity: "common", item_kind: "booster", slot: None, trait_name: Some("growth"), roll_min: 0, roll_max: 0, sell_price_mm: 12, booster_effect: Some("grow_boost"), booster_value: 1, booster_scope: Some("next_grow"), socket_capacity_base: 0, weight: 10 },
+    ]
+}
+
+fn pick_weighted<'a>(items: &'a [ItemTemplate]) -> Option<&'a ItemTemplate> {
+    if items.is_empty() {
+        return None;
+    }
+    let total: i32 = items.iter().map(|x| x.weight.max(0)).sum();
+    if total <= 0 {
+        return items.first();
+    }
+    let mut rng = rand::rng();
+    let mut roll = rng.random_range(1..=total);
+    for item in items {
+        roll -= item.weight.max(0);
+        if roll <= 0 {
+            return Some(item);
+        }
+    }
+    items.first()
+}
+
+fn rarity_allowed(chest_id: &str, rarity: &str) -> bool {
+    match chest_id {
+        "cheap_crate" => matches!(rarity, "trash" | "common" | "rare"),
+        "fighter_crate" => matches!(rarity, "common" | "rare" | "epic" | "legendary"),
+        "royal_crate" => matches!(rarity, "rare" | "epic" | "legendary"),
+        "daily_free_crate" => matches!(rarity, "trash" | "common" | "rare"),
+        _ => false,
+    }
+}
+
+pub async fn claim_daily_chest(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    chest_id: &str,
+) -> Result<(bool, Option<i64>), AppError> {
+    let last_claim: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT MAX(claimed_at) FROM huya_daily_chest_claim
+         WHERE tg_id = $1 AND chest_id = $2",
+    )
+    .bind(tg_id)
+    .bind(chest_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(ts) = last_claim {
+        let diff = Utc::now() - ts;
+        let secs = 24 * 3600 - diff.num_seconds();
+        if secs > 0 {
+            return Ok((false, Some(secs)));
+        }
+    }
+
+    sqlx::query(
+        "INSERT INTO huya_daily_chest_claim (chat_id, tg_id, chest_id, claimed_at)
+         VALUES (0, $1, $2, NOW())
+         ON CONFLICT (chat_id, tg_id, chest_id)
+         DO UPDATE SET claimed_at = EXCLUDED.claimed_at",
+    )
+    .bind(tg_id)
+    .bind(chest_id)
+    .execute(pool)
+    .await?;
+
+    Ok((true, None))
+}
+
+pub async fn open_chest(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    chest_id: &str,
+    free_open: bool,
+) -> Result<Option<HuyaInventoryItem>, AppError> {
+    let chest = chest_defs().into_iter().find(|c| c.id == chest_id);
+    let Some(chest) = chest else { return Ok(None) };
+    let (h, _) = get_or_create(pool, chat_id, tg_id).await?;
+    if !free_open && h.length_mm < chest.price_mm {
+        return Ok(None);
+    }
+
+    let candidates: Vec<ItemTemplate> = item_templates()
+        .into_iter()
+        .filter(|t| rarity_allowed(chest_id, t.rarity))
+        .collect();
+    let Some(template) = pick_weighted(&candidates).cloned() else {
+        return Ok(None);
+    };
+
+    let roll = if template.roll_max > template.roll_min {
+        let mut rng = rand::rng();
+        rng.random_range(template.roll_min..=template.roll_max)
+    } else {
+        template.roll_min
+    };
+    let resolved_slot = template.slot.map(|s| {
+        let mut rng = rand::rng();
+        match s {
+            "ring" => format!("ring_{}", rng.random_range(1..=6)),
+            "piercing_tip" => format!("piercing_tip_{}", rng.random_range(1..=3)),
+            "piercing_shaft" => format!("piercing_shaft_{}", rng.random_range(1..=3)),
+            "piercing_base" => format!("piercing_base_{}", rng.random_range(1..=2)),
+            _ => s.to_string(),
+        }
+    });
+    let socket_capacity = if template.item_kind == "equipment" {
+        template.socket_capacity_base.max(0)
+    } else {
+        0
+    };
+
+    let mut tx = pool.begin().await?;
+    if !free_open && chest.price_mm > 0 {
+        sqlx::query("UPDATE huya SET length_mm = length_mm - $1 WHERE id = $2")
+            .bind(chest.price_mm)
+            .bind(h.id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let row = sqlx::query_as::<_, HuyaInventoryItem>(
+        "INSERT INTO huya_inventory (
+            chat_id, tg_id, item_id, rarity, item_kind, slot, trait, roll, charges,
+            sell_price_mm, booster_effect, booster_value, booster_scope, socket_capacity
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         RETURNING id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                  roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                  socket_capacity, reforge_level, acquired_at",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(template.id)
+    .bind(template.rarity)
+    .bind(template.item_kind)
+    .bind(resolved_slot)
+    .bind(template.trait_name)
+    .bind(roll)
+    .bind(if template.item_kind == "booster" { 1 } else { 0 })
+    .bind(template.sell_price_mm)
+    .bind(template.booster_effect)
+    .bind(template.booster_value)
+    .bind(template.booster_scope)
+    .bind(socket_capacity)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO huya_loot_log (chat_id, tg_id, chest_id, item_id, rarity, item_kind, rolled_trait, roll)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(chest_id)
+    .bind(&row.item_id)
+    .bind(&row.rarity)
+    .bind(&row.item_kind)
+    .bind(row.trait_name.clone())
+    .bind(row.roll)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(row))
 }
 
 /// Equip an inventory item into a slot. Returns true on success.
@@ -476,22 +755,42 @@ pub async fn equip_item(
     slot: &str,
     inventory_id: i32,
 ) -> Result<bool, AppError> {
-    // Ensure item belongs to this player.
-    let owner = sqlx::query_scalar::<_, i64>(
-        "SELECT tg_id FROM huya_inventory WHERE id = $1 AND chat_id = $2",
+    let inv = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory WHERE id = $1 AND tg_id = $2",
     )
-    .bind(inventory_id)
-    .bind(chat_id)
-    .fetch_optional(pool)
-    .await?;
+    .bind(inventory_id).bind(tg_id)
+    .fetch_optional(pool).await?;
+    let Some(inv) = inv else {
+        return Ok(false);
+    };
+    if inv.tg_id != tg_id || inv.item_kind != "equipment" {
+        return Ok(false);
+    }
+    if let Some(ref expected_slot) = inv.slot && expected_slot != slot {
+        return Ok(false);
+    }
+    if slot.starts_with("ring_") || slot.starts_with("piercing_") {
+        let (h, _) = get_or_create(pool, chat_id, tg_id).await?;
+        if !slot_unlocked_for_length(slot, h.length_mm) {
+            return Ok(false);
+        }
+    }
 
-    if owner != Some(tg_id) {
+    // Ensure same inventory row isn't equipped in multiple slots.
+    let already: Option<String> = sqlx::query_scalar(
+        "SELECT slot FROM huya_equipment WHERE tg_id = $1 AND inventory_id = $2",
+    )
+    .bind(tg_id).bind(inventory_id)
+    .fetch_optional(pool).await?;
+    if already.is_some() {
         return Ok(false);
     }
 
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2 AND slot = $3")
-        .bind(chat_id)
+    sqlx::query("DELETE FROM huya_equipment WHERE tg_id = $1 AND slot = $2")
         .bind(tg_id)
         .bind(slot)
         .execute(&mut *tx)
@@ -512,6 +811,454 @@ pub async fn equip_item(
     Ok(true)
 }
 
+pub async fn sell_inventory_item(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    inventory_id: i32,
+) -> Result<Option<i32>, AppError> {
+    let mut tx = pool.begin().await?;
+    let item = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory WHERE id = $1 AND tg_id = $2",
+    )
+    .bind(inventory_id).bind(tg_id)
+    .fetch_optional(&mut *tx).await?;
+    let Some(item) = item else {
+        return Ok(None);
+    };
+
+    sqlx::query("DELETE FROM huya_equipment WHERE tg_id = $1 AND inventory_id = $2")
+        .bind(tg_id).bind(inventory_id)
+        .execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM huya_inventory WHERE id = $1 AND tg_id = $2")
+        .bind(inventory_id).bind(tg_id)
+        .execute(&mut *tx).await?;
+    sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE tg_id = $2")
+        .bind(item.sell_price_mm.max(0))
+        .bind(tg_id)
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Some(item.sell_price_mm.max(0)))
+}
+
+pub async fn use_booster_item(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    inventory_id: i32,
+) -> Result<Option<(String, i32)>, AppError> {
+    let mut tx = pool.begin().await?;
+    let item = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory WHERE id = $1 AND tg_id = $2",
+    )
+    .bind(inventory_id).bind(tg_id)
+    .fetch_optional(&mut *tx).await?;
+    let Some(item) = item else {
+        return Ok(None);
+    };
+    if item.item_kind != "booster" || item.charges <= 0 {
+        return Ok(None);
+    }
+    let effect = item.booster_effect.clone().unwrap_or_default();
+    let value = item.booster_value;
+    match effect.as_str() {
+        "atk_boost" => {
+            sqlx::query("UPDATE huya SET atk_boost = LEAST(atk_boost + $1, 90) WHERE tg_id = $2")
+                .bind(value).bind(tg_id).execute(&mut *tx).await?;
+        }
+        "grow_boost" => {
+            sqlx::query("UPDATE huya SET grow_boost = 1 WHERE tg_id = $1")
+                .bind(tg_id).execute(&mut *tx).await?;
+        }
+        "steal_boost" => {
+            sqlx::query("UPDATE huya SET steal_boost = LEAST(steal_boost + $1, 8) WHERE tg_id = $2")
+                .bind(value).bind(tg_id).execute(&mut *tx).await?;
+        }
+        "energy_boost" => {
+            sqlx::query("UPDATE huya SET actions_left = actions_left + $1 WHERE tg_id = $2")
+                .bind(value.max(1)).bind(tg_id).execute(&mut *tx).await?;
+        }
+        _ => return Ok(None),
+    }
+    sqlx::query("DELETE FROM huya_inventory WHERE id = $1 AND tg_id = $2")
+        .bind(inventory_id).bind(tg_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Some((effect, value)))
+}
+
+pub async fn socketed_gems_for_item(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    item_inventory_id: i32,
+) -> Result<Vec<HuyaSocketedGem>, AppError> {
+    let rows = sqlx::query_as::<_, HuyaSocketedGem>(
+        "SELECT id, chat_id, tg_id, item_inventory_id, socket_index, gem_item_id, gem_trait, gem_roll, gem_rarity, created_at
+         FROM huya_item_socket
+         WHERE tg_id = $1 AND item_inventory_id = $2
+         ORDER BY socket_index ASC",
+    )
+    .bind(tg_id)
+    .bind(item_inventory_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn all_socketed_gems_for_player(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+) -> Result<Vec<HuyaSocketedGem>, AppError> {
+    let rows = sqlx::query_as::<_, HuyaSocketedGem>(
+        "SELECT id, chat_id, tg_id, item_inventory_id, socket_index, gem_item_id, gem_trait, gem_roll, gem_rarity, created_at
+         FROM huya_item_socket
+         WHERE tg_id = $1
+         ORDER BY item_inventory_id ASC, socket_index ASC",
+    )
+    .bind(tg_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn available_gems(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+) -> Result<Vec<HuyaInventoryItem>, AppError> {
+    let rows = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory
+         WHERE tg_id = $1 AND item_kind = 'gem'
+         ORDER BY acquired_at DESC, id DESC",
+    )
+    .bind(tg_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn socket_gem_into_item(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    item_inventory_id: i32,
+    gem_inventory_id: i32,
+) -> Result<bool, AppError> {
+    let mut tx = pool.begin().await?;
+    let item = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory
+         WHERE id = $1 AND tg_id = $2",
+    )
+    .bind(item_inventory_id)
+    .bind(tg_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(item) = item else {
+        return Ok(false);
+    };
+    if item.item_kind != "equipment" || item.socket_capacity <= 0 {
+        return Ok(false);
+    }
+    let gem = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory
+         WHERE id = $1 AND tg_id = $2",
+    )
+    .bind(gem_inventory_id)
+    .bind(tg_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(gem) = gem else {
+        return Ok(false);
+    };
+    if gem.item_kind != "gem" {
+        return Ok(false);
+    }
+    let used: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM huya_item_socket WHERE item_inventory_id = $1",
+    )
+    .bind(item_inventory_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used >= item.socket_capacity as i64 {
+        return Ok(false);
+    }
+    let next_socket = (used as i32) + 1;
+
+    sqlx::query(
+        "INSERT INTO huya_item_socket (chat_id, tg_id, item_inventory_id, socket_index, gem_item_id, gem_trait, gem_roll, gem_rarity)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(item_inventory_id)
+    .bind(next_socket)
+    .bind(gem.item_id)
+    .bind(gem.trait_name)
+    .bind(gem.roll)
+    .bind(gem.rarity)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM huya_inventory WHERE id = $1 AND tg_id = $2")
+        .bind(gem_inventory_id)
+        .bind(tg_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+#[derive(Clone, Copy)]
+pub enum ReforgeOutcome {
+    Success,
+    Fail,
+    CritFail,
+}
+
+pub struct ReforgeResult {
+    pub outcome: ReforgeOutcome,
+    pub old_roll: i32,
+    pub new_roll: i32,
+}
+
+pub async fn reforge_item_with_gem(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+    item_inventory_id: i32,
+    catalyst_gem_id: i32,
+) -> Result<Option<ReforgeResult>, AppError> {
+    let mut tx = pool.begin().await?;
+    let item = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory
+         WHERE id = $1 AND tg_id = $2",
+    )
+    .bind(item_inventory_id)
+    .bind(tg_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(item) = item else {
+        return Ok(None);
+    };
+    if item.item_kind != "equipment" {
+        return Ok(None);
+    }
+
+    let catalyst = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory
+         WHERE id = $1 AND tg_id = $2",
+    )
+    .bind(catalyst_gem_id)
+    .bind(tg_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(catalyst) = catalyst else {
+        return Ok(None);
+    };
+    if catalyst.item_kind != "gem" {
+        return Ok(None);
+    }
+
+    let (mut succ, mut crit) = match item.rarity.as_str() {
+        "epic" => (62_i32, 10_i32),
+        "legendary" => (48_i32, 17_i32),
+        _ => (75_i32, 5_i32),
+    };
+    let penalty = (item.reforge_level * 3).clamp(0, 25);
+    succ = (succ - penalty).max(20);
+    crit = (crit + penalty / 2).min(35);
+    let fail = (100 - succ - crit).max(0);
+    let roll_rng = {
+        let mut rng = rand::rng();
+        rng.random_range(1..=100)
+    };
+    let outcome = if roll_rng <= succ {
+        ReforgeOutcome::Success
+    } else if roll_rng <= succ + fail {
+        ReforgeOutcome::Fail
+    } else {
+        ReforgeOutcome::CritFail
+    };
+
+    let old_roll = item.roll;
+    let mut new_roll = old_roll;
+
+    // Catalyst always consumed in medium profile.
+    sqlx::query("DELETE FROM huya_inventory WHERE id = $1 AND tg_id = $2")
+        .bind(catalyst_gem_id)
+        .bind(tg_id)
+        .execute(&mut *tx)
+        .await?;
+
+    match outcome {
+        ReforgeOutcome::Success => {
+            let add = rand::rng().random_range(2..=9);
+            new_roll = old_roll + add;
+            sqlx::query(
+                "UPDATE huya_inventory
+                 SET roll = $1, reforge_level = reforge_level + 1
+                 WHERE id = $2 AND tg_id = $3",
+            )
+            .bind(new_roll)
+            .bind(item_inventory_id)
+            .bind(tg_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        ReforgeOutcome::Fail => {
+            sqlx::query(
+                "UPDATE huya_inventory
+                 SET reforge_level = reforge_level + 1
+                 WHERE id = $1 AND tg_id = $2",
+            )
+            .bind(item_inventory_id)
+            .bind(tg_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        ReforgeOutcome::CritFail => {
+            sqlx::query("DELETE FROM huya_inventory WHERE id = $1 AND tg_id = $2")
+                .bind(item_inventory_id)
+                .bind(tg_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    let outcome_str = match outcome {
+        ReforgeOutcome::Success => "success",
+        ReforgeOutcome::Fail => "fail",
+        ReforgeOutcome::CritFail => "crit_fail",
+    };
+    sqlx::query(
+        "INSERT INTO huya_reforge_log
+          (chat_id, tg_id, item_inventory_id, catalyst_item_id, old_roll, new_roll, old_reforge_level, new_reforge_level, outcome)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+    )
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(item_inventory_id)
+    .bind(catalyst.item_id)
+    .bind(old_roll)
+    .bind(new_roll)
+    .bind(item.reforge_level)
+    .bind(item.reforge_level + 1)
+    .bind(outcome_str)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(ReforgeResult { outcome, old_roll, new_roll }))
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct EquipmentEffects {
+    pub atk_pct: f64,
+    pub def_pct: f64,
+    pub hp_flat: i32,
+    pub hp_pct: f64,
+    pub steal_chance_pct: f64,
+    pub steal_resist_pct: f64,
+    pub reflect_pct: f64,
+    pub raid_initiative: f64,
+    pub grow_bonus_pct: f64,
+}
+
+pub async fn equipment_effects_for_player(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<EquipmentEffects, AppError> {
+    let rows = sqlx::query_as::<_, HuyaInventoryItem>(
+        "WITH eq AS (
+            SELECT DISTINCT ON (slot) tg_id, slot, inventory_id
+            FROM huya_equipment
+            WHERE tg_id = $1
+            ORDER BY slot, chat_id DESC
+         )
+         SELECT i.id, i.chat_id, i.tg_id, i.item_id, i.rarity, i.item_kind, i.slot, i.trait AS trait_name,
+                i.roll, i.charges, i.sell_price_mm, i.booster_effect, i.booster_value, i.booster_scope,
+                i.socket_capacity, i.reforge_level, i.acquired_at
+         FROM eq e
+         JOIN huya_inventory i ON i.id = e.inventory_id",
+    )
+    .bind(tg_id)
+    .fetch_all(pool).await?;
+
+    let mut fx = EquipmentEffects::default();
+    for it in rows {
+        let r = it.roll.max(0) as f64;
+        match it.trait_name.as_deref() {
+            Some("spiked_ring_reflect") => fx.reflect_pct += 0.04 + r / 500.0,
+            Some("cage_guard") | Some("anti_burst") => fx.def_pct += 0.03 + r / 400.0,
+            Some("blood_taste") => fx.atk_pct += 0.03 + r / 500.0,
+            Some("raid_initiative") => fx.raid_initiative += 0.04 + r / 500.0,
+            Some("safe_poke") => fx.steal_resist_pct += 0.04 + r / 500.0,
+            Some("eternal_echo") => {
+                fx.atk_pct += 0.06 + r / 350.0;
+                fx.def_pct += 0.04 + r / 450.0;
+                fx.steal_chance_pct += 0.04;
+            }
+            Some("jittery") | Some("sticky") => fx.steal_chance_pct += 0.01 + r / 1000.0,
+            _ => {}
+        }
+    }
+    let gems = sqlx::query_as::<_, HuyaSocketedGem>(
+        "WITH eq AS (
+            SELECT DISTINCT ON (slot) tg_id, slot, inventory_id
+            FROM huya_equipment
+            WHERE tg_id = $1
+            ORDER BY slot, chat_id DESC
+         )
+         SELECT s.id, s.chat_id, s.tg_id, s.item_inventory_id, s.socket_index, s.gem_item_id, s.gem_trait, s.gem_roll, s.gem_rarity, s.created_at
+         FROM huya_item_socket s
+         JOIN eq e
+           ON e.tg_id = s.tg_id
+          AND e.inventory_id = s.item_inventory_id
+         WHERE s.tg_id = $1",
+    )
+    .bind(tg_id)
+    .fetch_all(pool)
+    .await?;
+    for g in gems {
+        let r = g.gem_roll.max(0) as f64;
+        match g.gem_trait.as_deref() {
+            Some("gem_atk") => fx.atk_pct += 0.015 + r / 700.0,
+            Some("gem_def") => fx.def_pct += 0.015 + r / 700.0,
+            Some("gem_steal") => fx.steal_chance_pct += 0.01 + r / 900.0,
+            Some("gem_initiative") => fx.raid_initiative += 0.02 + r / 700.0,
+            Some("gem_reflect") => fx.reflect_pct += 0.015 + r / 850.0,
+            _ => {}
+        }
+    }
+    // Safety caps.
+    fx.atk_pct = fx.atk_pct.clamp(0.0, 0.35);
+    fx.def_pct = fx.def_pct.clamp(0.0, 0.35);
+    fx.reflect_pct = fx.reflect_pct.clamp(0.0, 0.20);
+    fx.steal_chance_pct = fx.steal_chance_pct.clamp(0.0, 0.25);
+    fx.steal_resist_pct = fx.steal_resist_pct.clamp(0.0, 0.25);
+    fx.raid_initiative = fx.raid_initiative.clamp(0.0, 0.30);
+    Ok(fx)
+}
+
 /// Unequip a slot. Returns true if something was unequipped.
 pub async fn unequip_item(
     pool: &PgPool,
@@ -520,9 +1267,8 @@ pub async fn unequip_item(
     slot: &str,
 ) -> Result<bool, AppError> {
     let res = sqlx::query(
-        "DELETE FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2 AND slot = $3",
+        "DELETE FROM huya_equipment WHERE tg_id = $1 AND slot = $2",
     )
-    .bind(chat_id)
     .bind(tg_id)
     .bind(slot)
     .execute(pool)
@@ -550,25 +1296,22 @@ async fn drop_rings_on_shrink(
         let slot_name = format!("ring_{}", idx);
         if let Some(inv_id) = sqlx::query_scalar::<_, i32>(
             "SELECT inventory_id FROM huya_equipment \
-             WHERE chat_id = $1 AND tg_id = $2 AND slot = $3",
+             WHERE tg_id = $1 AND slot = $2",
         )
-        .bind(chat_id)
         .bind(loser_tg_id)
         .bind(&slot_name)
         .fetch_optional(pool)
         .await?
         {
             let mut tx = pool.begin().await?;
-            sqlx::query("DELETE FROM huya_equipment WHERE chat_id = $1 AND tg_id = $2 AND slot = $3")
-                .bind(chat_id)
+            sqlx::query("DELETE FROM huya_equipment WHERE tg_id = $1 AND slot = $2")
                 .bind(loser_tg_id)
                 .bind(&slot_name)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query("UPDATE huya_inventory SET tg_id = $1 WHERE id = $2 AND chat_id = $3")
+            sqlx::query("UPDATE huya_inventory SET tg_id = $1 WHERE id = $2")
                 .bind(winner_tg_id)
                 .bind(inv_id)
-                .bind(chat_id)
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await?;
@@ -867,9 +1610,86 @@ pub fn item_cost_mm(item_id: &str) -> Option<i32> {
         "adrenaline" => Some(30),
         "armor"      => Some(30),
         "steroid"    => Some(20),
-        "energy"     => Some(50),
         _ => None,
     }
+}
+
+pub fn energy_price_mm(huya: &Huya, item_id: &str) -> Option<i32> {
+    let base = match item_id {
+        "energy_small" => 65,
+        "energy_big" => 170,
+        _ => return None,
+    };
+    let buys = huya.energy_buys_today.max(0) as f64;
+    let mult = 1.0 + buys * 0.35;
+    Some(((base as f64) * mult).round() as i32)
+}
+
+pub async fn buy_energy_item(
+    pool: &PgPool,
+    huya: &Huya,
+    item_id: &str,
+    chat_id: i64,
+) -> Result<Option<(Huya, i32)>, AppError> {
+    let today = Utc::now().date_naive();
+    let mut h = huya.clone();
+    if h.energy_buys_reset_at < today {
+        h = sqlx::query_as::<_, Huya>(
+            &format!(
+                "UPDATE huya
+                 SET energy_buys_today = 0, energy_buys_reset_at = $1
+                 WHERE id = $2
+                 RETURNING {HUYA_SELECT}"
+            ),
+        )
+        .bind(today)
+        .bind(h.id)
+        .fetch_one(pool)
+        .await?;
+    }
+    let Some(cost) = energy_price_mm(&h, item_id) else {
+        return Ok(None);
+    };
+    if h.length_mm < cost {
+        return Ok(None);
+    }
+    let (booster_id, booster_value, sell_price) = match item_id {
+        "energy_small" => ("booster_energy_small", 1, 18),
+        "energy_big" => ("booster_energy_big", 3, 42),
+        _ => return Ok(None),
+    };
+    let mut tx = pool.begin().await?;
+    let updated = sqlx::query_as::<_, Huya>(
+        &format!(
+            "UPDATE huya
+             SET length_mm = length_mm - $1,
+                 energy_buys_today = energy_buys_today + 1
+             WHERE id = $2 AND length_mm >= $1
+             RETURNING {HUYA_SELECT}"
+        ),
+    )
+    .bind(cost)
+    .bind(h.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(updated) = updated else {
+        return Ok(None);
+    };
+    sqlx::query(
+        "INSERT INTO huya_inventory (
+            chat_id, tg_id, item_id, rarity, item_kind, slot, trait, roll, charges,
+            sell_price_mm, booster_effect, booster_value, booster_scope, socket_capacity
+         ) VALUES ($1,$2,$3,'common','booster',NULL,'energy',0,1,$4,'energy_boost',$5,'inventory',0)",
+    )
+    .bind(chat_id)
+    .bind(updated.tg_id)
+    .bind(booster_id)
+    .bind(sell_price)
+    .bind(booster_value)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some((updated, cost)))
 }
 
 /// Buy an item from the shop. Deducts cost from length_mm and applies effect.
@@ -916,17 +1736,738 @@ pub async fn buy_item(pool: &PgPool, huya: &Huya, item_id: &str) -> Result<Optio
         )
         .bind(cost).bind(huya.id).fetch_optional(pool).await?,
 
-        "energy" => sqlx::query_as::<_, Huya>(
-            &format!("UPDATE huya SET length_mm = length_mm - $1,
-             actions_left = actions_left + 1 WHERE id = $2 AND length_mm >= $1
-             RETURNING {HUYA_SELECT}"),
-        )
-        .bind(cost).bind(huya.id).fetch_optional(pool).await?,
-
         _ => return Ok(None),
     };
 
     Ok(updated)
+}
+
+// ── Raid (party vs one target) ───────────────────────────────────────────────
+
+const RAID_MAX_ADVANTAGE: f64 = 0.15;
+const RAID_TARGET_COOLDOWN_MINUTES: i64 = 45;
+const RAID_STEAL_CAP_PCT: f64 = 0.10;
+const RAID_TURN_TIMEOUT_SECONDS: i64 = 45;
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaRaid {
+    pub id: i32,
+    pub chat_id: i64,
+    pub leader_tg_id: i64,
+    pub target_tg_id: i64,
+    pub status: String,
+    pub target_accepted: bool,
+    pub power_override_by_target: bool,
+    pub message_id: i32,
+    pub round: i32,
+    pub turn_index: i32,
+    pub focus_round: i32,
+    pub initiative_order: String,
+    pub max_rounds: i32,
+    pub turn_deadline_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaRaidMember {
+    pub id: i32,
+    pub raid_id: i32,
+    pub tg_id: i64,
+    pub side: String,
+    pub slot: i32,
+    pub hp_snapshot: i32,
+    pub is_alive: bool,
+    pub acted_in_round: bool,
+    pub guard_until_round: i32,
+    pub damage_done: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+pub struct RaidPowerCheck {
+    pub party_power: i64,
+    pub target_power: i64,
+    pub within_window: bool,
+}
+
+pub enum RaidTurnAction {
+    Attack,
+    Guard,
+    Focus,
+}
+
+pub struct RaidTurnResult {
+    pub raid: HuyaRaid,
+    pub members: Vec<HuyaRaidMember>,
+    pub actor_tg_id: i64,
+    pub actor_side: String,
+    pub log_line: String,
+    pub finished: bool,
+    pub winner_side: Option<String>,
+}
+
+const RAID_SELECT: &str =
+    "id, chat_id, leader_tg_id, target_tg_id, status, target_accepted, power_override_by_target, message_id, \
+     round, turn_index, focus_round, initiative_order, max_rounds, turn_deadline_at, created_at, expires_at";
+
+const RAID_MEMBER_SELECT: &str =
+    "id, raid_id, tg_id, side, slot, hp_snapshot, is_alive, acted_in_round, \
+     guard_until_round, damage_done, created_at";
+
+pub fn raid_player_power(h: &Huya) -> i64 {
+    let mut skills_factor = 0_i64;
+    skills_factor += (h.skill_shaft * 12) as i64;
+    skills_factor += (h.skill_skin * 10) as i64;
+    skills_factor += (h.skill_balls * 9) as i64;
+    skills_factor += (h.skill_stamina * 8) as i64;
+    skills_factor += (h.skill_spirit * 14) as i64;
+    skills_factor += (h.skill_pierce * 14) as i64;
+    skills_factor += (h.skill_scales * 10) as i64;
+    skills_factor += (h.skill_berserker * 25) as i64;
+    skills_factor += (h.skill_fortress * 22) as i64;
+    skills_factor += (h.skill_ghost * 18) as i64;
+    skills_factor += (h.skill_eternal * 45) as i64;
+
+    h.length_mm.max(1) as i64
+        + (h.hp.max(1) * 8) as i64
+        + (h.level.max(1) * 40) as i64
+        + skills_factor
+}
+
+fn parse_initiative_order(s: &str) -> Vec<i64> {
+    s.split(',')
+        .filter_map(|p| p.trim().parse::<i64>().ok())
+        .collect()
+}
+
+fn serialize_initiative_order(order: &[i64]) -> String {
+    order
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn initiative_score(h: &Huya) -> i64 {
+    let base = h.level as i64 * 2 + h.skill_speedrun as i64 * 12 + h.skill_dynamo as i64 * 4;
+    base + (h.length_mm as i64 / 10).max(1)
+}
+
+fn next_alive_index(order: &[i64], members: &[HuyaRaidMember], from: usize) -> usize {
+    if order.is_empty() {
+        return 0;
+    }
+    for step in 0..order.len() {
+        let idx = (from + step) % order.len();
+        let actor = order[idx];
+        if members.iter().any(|m| m.tg_id == actor && m.is_alive) {
+            return idx;
+        }
+    }
+    0
+}
+
+pub async fn get_pending_or_active_raid(pool: &PgPool, chat_id: i64) -> Result<Option<HuyaRaid>, AppError> {
+    let row = sqlx::query_as::<_, HuyaRaid>(
+        &format!(
+            "SELECT {RAID_SELECT} FROM huya_raid
+             WHERE chat_id = $1 AND status IN ('pending', 'active')
+             ORDER BY created_at DESC LIMIT 1"
+        ),
+    )
+    .bind(chat_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn get_raid(pool: &PgPool, raid_id: i32) -> Result<Option<HuyaRaid>, AppError> {
+    let row = sqlx::query_as::<_, HuyaRaid>(
+        &format!("SELECT {RAID_SELECT} FROM huya_raid WHERE id = $1"),
+    )
+    .bind(raid_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn get_raid_members(pool: &PgPool, raid_id: i32) -> Result<Vec<HuyaRaidMember>, AppError> {
+    let rows = sqlx::query_as::<_, HuyaRaidMember>(
+        &format!(
+            "SELECT {RAID_MEMBER_SELECT} FROM huya_raid_member
+             WHERE raid_id = $1 ORDER BY side DESC, slot ASC, created_at ASC"
+        ),
+    )
+    .bind(raid_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn raid_target_on_cooldown(pool: &PgPool, chat_id: i64, target_tg_id: i64) -> Result<bool, AppError> {
+    let recent: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM huya_raid
+         WHERE chat_id = $1 AND target_tg_id = $2
+           AND created_at > NOW() - ($3 || ' minutes')::interval
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(chat_id)
+    .bind(target_tg_id)
+    .bind(RAID_TARGET_COOLDOWN_MINUTES)
+    .fetch_optional(pool)
+    .await?;
+    Ok(recent.is_some())
+}
+
+pub async fn create_raid(
+    pool: &PgPool,
+    chat_id: i64,
+    leader_tg_id: i64,
+    target_tg_id: i64,
+    leader_hp: i32,
+    target_hp: i32,
+) -> Result<HuyaRaid, AppError> {
+    let raid = sqlx::query_as::<_, HuyaRaid>(
+        &format!(
+            "INSERT INTO huya_raid (chat_id, leader_tg_id, target_tg_id)
+             VALUES ($1, $2, $3)
+             RETURNING {RAID_SELECT}"
+        ),
+    )
+    .bind(chat_id)
+    .bind(leader_tg_id)
+    .bind(target_tg_id)
+    .fetch_one(pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO huya_raid_member (raid_id, tg_id, side, slot, hp_snapshot)
+         VALUES ($1, $2, 'party', 1, $3), ($1, $4, 'target', 1, $5)",
+    )
+    .bind(raid.id)
+    .bind(leader_tg_id)
+    .bind(leader_hp.max(1))
+    .bind(target_tg_id)
+    .bind(target_hp.max(1))
+    .execute(pool)
+    .await?;
+
+    Ok(raid)
+}
+
+pub async fn set_raid_message_id(pool: &PgPool, raid_id: i32, message_id: i32) -> Result<(), AppError> {
+    sqlx::query("UPDATE huya_raid SET message_id = $1 WHERE id = $2")
+        .bind(message_id)
+        .bind(raid_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn accept_raid(pool: &PgPool, raid_id: i32, target_tg_id: i64) -> Result<Option<HuyaRaid>, AppError> {
+    let row = sqlx::query_as::<_, HuyaRaid>(
+        &format!(
+            "UPDATE huya_raid SET target_accepted = TRUE
+             WHERE id = $1 AND target_tg_id = $2 AND status = 'pending'
+             RETURNING {RAID_SELECT}"
+        ),
+    )
+    .bind(raid_id)
+    .bind(target_tg_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn approve_raid_power_override(
+    pool: &PgPool,
+    raid_id: i32,
+    target_tg_id: i64,
+) -> Result<Option<HuyaRaid>, AppError> {
+    let row = sqlx::query_as::<_, HuyaRaid>(
+        &format!(
+            "UPDATE huya_raid SET power_override_by_target = TRUE
+             WHERE id = $1 AND target_tg_id = $2 AND status = 'pending' AND target_accepted = TRUE
+             RETURNING {RAID_SELECT}"
+        ),
+    )
+    .bind(raid_id)
+    .bind(target_tg_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn decline_raid(pool: &PgPool, raid_id: i32, target_tg_id: i64) -> Result<Option<HuyaRaid>, AppError> {
+    let row = sqlx::query_as::<_, HuyaRaid>(
+        &format!(
+            "UPDATE huya_raid SET status = 'cancelled'
+             WHERE id = $1 AND target_tg_id = $2 AND status = 'pending'
+             RETURNING {RAID_SELECT}"
+        ),
+    )
+    .bind(raid_id)
+    .bind(target_tg_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn disband_raid_by_leader(pool: &PgPool, raid_id: i32, leader_tg_id: i64) -> Result<Option<HuyaRaid>, AppError> {
+    let row = sqlx::query_as::<_, HuyaRaid>(
+        &format!(
+            "UPDATE huya_raid SET status = 'cancelled'
+             WHERE id = $1 AND leader_tg_id = $2 AND status = 'pending'
+             RETURNING {RAID_SELECT}"
+        ),
+    )
+    .bind(raid_id)
+    .bind(leader_tg_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn raid_join_party(
+    pool: &PgPool,
+    raid_id: i32,
+    tg_id: i64,
+    hp_snapshot: i32,
+) -> Result<bool, AppError> {
+    let raid = match get_raid(pool, raid_id).await? {
+        Some(r) if r.status == "pending" && r.target_accepted => r,
+        _ => return Ok(false),
+    };
+    if tg_id == raid.target_tg_id {
+        return Ok(false);
+    }
+    let party_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM huya_raid_member WHERE raid_id = $1 AND side = 'party'",
+    )
+    .bind(raid_id)
+    .fetch_one(pool)
+    .await?;
+    if party_count >= 5 {
+        return Ok(false);
+    }
+    let slot = (party_count as i32) + 1;
+    let inserted = sqlx::query(
+        "INSERT INTO huya_raid_member (raid_id, tg_id, side, slot, hp_snapshot)
+         VALUES ($1, $2, 'party', $3, $4)
+         ON CONFLICT (raid_id, tg_id) DO NOTHING",
+    )
+    .bind(raid_id)
+    .bind(tg_id)
+    .bind(slot)
+    .bind(hp_snapshot.max(1))
+    .execute(pool)
+    .await?;
+    Ok(inserted.rows_affected() > 0)
+}
+
+pub async fn raid_kick_party_member(
+    pool: &PgPool,
+    raid_id: i32,
+    leader_tg_id: i64,
+    member_tg_id: i64,
+) -> Result<bool, AppError> {
+    let raid = match get_raid(pool, raid_id).await? {
+        Some(r) if r.status == "pending" => r,
+        _ => return Ok(false),
+    };
+    if raid.leader_tg_id != leader_tg_id || member_tg_id == leader_tg_id || member_tg_id == raid.target_tg_id {
+        return Ok(false);
+    }
+    let res = sqlx::query(
+        "DELETE FROM huya_raid_member
+         WHERE raid_id = $1 AND tg_id = $2 AND side = 'party'",
+    )
+    .bind(raid_id)
+    .bind(member_tg_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn raid_power_check(pool: &PgPool, raid_id: i32) -> Result<Option<RaidPowerCheck>, AppError> {
+    let raid = match get_raid(pool, raid_id).await? {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    let members = get_raid_members(pool, raid_id).await?;
+    let mut party_power = 0_i64;
+    let mut target_power = 0_i64;
+    for m in members {
+        let (h, _) = get_or_create(pool, raid.chat_id, m.tg_id).await?;
+        if m.side == "party" {
+            party_power += raid_player_power(&h);
+        } else {
+            target_power = raid_player_power(&h);
+        }
+    }
+    if target_power <= 0 {
+        return Ok(None);
+    }
+    let max_allowed = (target_power as f64) * (1.0 + RAID_MAX_ADVANTAGE);
+    Ok(Some(RaidPowerCheck {
+        party_power,
+        target_power,
+        within_window: (party_power as f64) <= max_allowed || raid.power_override_by_target,
+    }))
+}
+
+pub async fn raid_start(pool: &PgPool, raid_id: i32) -> Result<Option<HuyaRaid>, AppError> {
+    let raid = match get_raid(pool, raid_id).await? {
+        Some(r) if r.status == "pending" && r.target_accepted => r,
+        _ => return Ok(None),
+    };
+    let members = get_raid_members(pool, raid_id).await?;
+    let party_count = members.iter().filter(|m| m.side == "party").count();
+    if !(2..=5).contains(&party_count) {
+        return Ok(None);
+    }
+    let Some(power) = raid_power_check(pool, raid_id).await? else {
+        return Ok(None);
+    };
+    if !power.within_window {
+        return Ok(None);
+    }
+
+    let mut order: Vec<(i64, i64)> = Vec::new();
+    for m in &members {
+        if !m.is_alive {
+            continue;
+        }
+        let (h, _) = get_or_create(pool, raid.chat_id, m.tg_id).await?;
+        let fx = equipment_effects_for_player(pool, raid.chat_id, m.tg_id).await.unwrap_or_default();
+        let ini = initiative_score(&h) + (fx.raid_initiative * 100.0) as i64;
+        order.push((m.tg_id, ini));
+    }
+    order.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let order_ids: Vec<i64> = order.into_iter().map(|x| x.0).collect();
+    if order_ids.is_empty() {
+        return Ok(None);
+    }
+
+    let started = sqlx::query_as::<_, HuyaRaid>(
+        &format!(
+            "UPDATE huya_raid
+             SET status = 'active', round = 1, turn_index = 0, focus_round = 0, initiative_order = $2,
+                 turn_deadline_at = NOW() + ($3 || ' seconds')::interval
+             WHERE id = $1 AND status = 'pending'
+             RETURNING {RAID_SELECT}"
+        ),
+    )
+    .bind(raid_id)
+    .bind(serialize_initiative_order(&order_ids))
+    .bind(RAID_TURN_TIMEOUT_SECONDS)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(started)
+}
+
+pub async fn raid_current_actor(pool: &PgPool, raid_id: i32) -> Result<Option<i64>, AppError> {
+    let mut raid = match get_raid(pool, raid_id).await? {
+        Some(r) if r.status == "active" => r,
+        _ => return Ok(None),
+    };
+    let members = get_raid_members(pool, raid_id).await?;
+    let order = parse_initiative_order(&raid.initiative_order);
+    if order.is_empty() {
+        return Ok(None);
+    }
+    let mut idx = next_alive_index(&order, &members, raid.turn_index.max(0) as usize);
+    if let Some(deadline) = raid.turn_deadline_at {
+        if Utc::now() >= deadline {
+            idx = next_alive_index(&order, &members, idx + 1);
+            raid = sqlx::query_as::<_, HuyaRaid>(
+                &format!(
+                    "UPDATE huya_raid
+                     SET turn_index = $2,
+                         turn_deadline_at = NOW() + ($3 || ' seconds')::interval
+                     WHERE id = $1
+                     RETURNING {RAID_SELECT}"
+                ),
+            )
+            .bind(raid.id)
+            .bind(idx as i32)
+            .bind(RAID_TURN_TIMEOUT_SECONDS)
+            .fetch_one(pool)
+            .await?;
+        }
+    }
+    let idx = next_alive_index(&order, &members, raid.turn_index.max(0) as usize);
+    Ok(order.get(idx).copied())
+}
+
+pub async fn raid_take_turn(
+    pool: &PgPool,
+    raid_id: i32,
+    actor_tg_id: i64,
+    action: RaidTurnAction,
+) -> Result<Option<RaidTurnResult>, AppError> {
+    let raid = match get_raid(pool, raid_id).await? {
+        Some(r) if r.status == "active" => r,
+        _ => return Ok(None),
+    };
+    let mut members = get_raid_members(pool, raid_id).await?;
+    let order = parse_initiative_order(&raid.initiative_order);
+    if order.is_empty() {
+        return Ok(None);
+    }
+
+    let idx = next_alive_index(&order, &members, raid.turn_index.max(0) as usize);
+    let current_actor = match order.get(idx) {
+        Some(v) => *v,
+        None => return Ok(None),
+    };
+    if current_actor != actor_tg_id {
+        return Ok(None);
+    }
+
+    let actor = match members.iter().find(|m| m.tg_id == actor_tg_id && m.is_alive) {
+        Some(v) => v.clone(),
+        None => return Ok(None),
+    };
+    let actor_side = actor.side.clone();
+    let (actor_huya, _) = get_or_create(pool, raid.chat_id, actor_tg_id).await?;
+
+    let log_line = match action {
+        RaidTurnAction::Guard => {
+            sqlx::query(
+                "UPDATE huya_raid_member SET guard_until_round = $1, acted_in_round = TRUE
+                 WHERE raid_id = $2 AND tg_id = $3",
+            )
+            .bind(raid.round)
+            .bind(raid.id)
+            .bind(actor_tg_id)
+            .execute(pool)
+            .await?;
+            "🛡️ Защита до следующего хода".to_string()
+        }
+        RaidTurnAction::Focus => {
+            if actor_side != "party" {
+                return Ok(None);
+            }
+            sqlx::query("UPDATE huya_raid SET focus_round = $1 WHERE id = $2")
+                .bind(raid.round)
+                .bind(raid.id)
+                .execute(pool)
+                .await?;
+            sqlx::query(
+                "UPDATE huya_raid_member SET acted_in_round = TRUE
+                 WHERE raid_id = $1 AND tg_id = $2",
+            )
+            .bind(raid.id)
+            .bind(actor_tg_id)
+            .execute(pool)
+            .await?;
+            "🎯 Пати сфокусировала урон на эту цель".to_string()
+        }
+        RaidTurnAction::Attack => {
+            let target_member = if actor_side == "party" {
+                members
+                    .iter()
+                    .find(|m| m.side == "target" && m.is_alive)
+                    .cloned()
+            } else {
+                let mut party_alive: Vec<HuyaRaidMember> = members
+                    .iter()
+                    .filter(|m| m.side == "party" && m.is_alive)
+                    .cloned()
+                    .collect();
+                party_alive.sort_by(|a, b| a.hp_snapshot.cmp(&b.hp_snapshot));
+                party_alive.into_iter().next()
+            };
+            let Some(target_member) = target_member else {
+                return Ok(None);
+            };
+            let (target_huya, _) = get_or_create(pool, raid.chat_id, target_member.tg_id).await?;
+            let actor_fx = equipment_effects_for_player(pool, raid.chat_id, actor_tg_id).await.unwrap_or_default();
+            let target_fx = equipment_effects_for_player(pool, raid.chat_id, target_member.tg_id).await.unwrap_or_default();
+            let rand_bonus = {
+                let mut rng = rand::rng();
+                rng.random_range(6.0_f64..18.0_f64)
+            };
+            let mut damage = (actor_huya.length_mm.max(1) as f64 * 0.035
+                + actor_huya.level.max(1) as f64 * 3.0
+                + rand_bonus) as i32;
+
+            let atk_factor = 1.0
+                + actor_huya.skill_shaft as f64 * 0.04
+                + actor_huya.skill_pierce as f64 * 0.02
+                + actor_huya.skill_eternal as f64 * 0.10
+                + actor_fx.atk_pct;
+            let mut def_factor =
+                (1.0 - target_huya.skill_skin as f64 * 0.03 - target_huya.skill_scales as f64 * 0.01 - target_fx.def_pct).max(0.25);
+            if target_member.guard_until_round == raid.round {
+                def_factor *= 0.65;
+            }
+            if actor_side == "party" && raid.focus_round == raid.round {
+                damage = (damage as f64 * 1.12) as i32;
+            }
+            damage = ((damage as f64) * atk_factor * def_factor).round() as i32;
+            damage = damage.max(3);
+
+            sqlx::query(
+                "UPDATE huya_raid_member
+                 SET hp_snapshot = GREATEST(hp_snapshot - $1, 0),
+                     is_alive = CASE WHEN hp_snapshot - $1 <= 0 THEN FALSE ELSE TRUE END
+                 WHERE raid_id = $2 AND tg_id = $3",
+            )
+            .bind(damage)
+            .bind(raid.id)
+            .bind(target_member.tg_id)
+            .execute(pool)
+            .await?;
+            sqlx::query(
+                "UPDATE huya_raid_member
+                 SET acted_in_round = TRUE, damage_done = damage_done + $1
+                 WHERE raid_id = $2 AND tg_id = $3",
+            )
+            .bind(damage)
+            .bind(raid.id)
+            .bind(actor_tg_id)
+            .execute(pool)
+            .await?;
+            if target_fx.reflect_pct > 0.0 {
+                let reflected = ((damage as f64) * target_fx.reflect_pct).round() as i32;
+                if reflected > 0 {
+                    sqlx::query(
+                        "UPDATE huya_raid_member
+                         SET hp_snapshot = GREATEST(hp_snapshot - $1, 0),
+                             is_alive = CASE WHEN hp_snapshot - $1 <= 0 THEN FALSE ELSE TRUE END
+                         WHERE raid_id = $2 AND tg_id = $3",
+                    )
+                    .bind(reflected)
+                    .bind(raid.id)
+                    .bind(actor_tg_id)
+                    .execute(pool)
+                    .await?;
+                }
+            }
+            format!("💥 Урон {damage} по цели")
+        }
+    };
+
+    let mut raid_now = match get_raid(pool, raid_id).await? {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    members = get_raid_members(pool, raid_id).await?;
+
+    let party_alive = members.iter().any(|m| m.side == "party" && m.is_alive);
+    let target_alive = members.iter().any(|m| m.side == "target" && m.is_alive);
+    if !party_alive || !target_alive || raid_now.round >= raid_now.max_rounds {
+        let winner_side = if party_alive && !target_alive {
+            Some("party".to_string())
+        } else if !party_alive && target_alive {
+            Some("target".to_string())
+        } else {
+            None
+        };
+        sqlx::query("UPDATE huya_raid SET status = 'done' WHERE id = $1")
+            .bind(raid.id)
+            .execute(pool)
+            .await?;
+        raid_now = match get_raid(pool, raid_id).await? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        return Ok(Some(RaidTurnResult {
+            raid: raid_now,
+            members,
+            actor_tg_id,
+            actor_side,
+            log_line,
+            finished: true,
+            winner_side,
+        }));
+    }
+
+    let new_index = ((idx + 1) % order.len()) as i32;
+    let wrapped = new_index == 0;
+    if wrapped {
+        sqlx::query("UPDATE huya_raid_member SET acted_in_round = FALSE WHERE raid_id = $1")
+            .bind(raid.id)
+            .execute(pool)
+            .await?;
+    }
+    sqlx::query(
+        "UPDATE huya_raid
+         SET turn_index = $2,
+             round = CASE WHEN $3 THEN round + 1 ELSE round END,
+             turn_deadline_at = NOW() + ($4 || ' seconds')::interval
+         WHERE id = $1",
+    )
+    .bind(raid.id)
+    .bind(new_index)
+    .bind(wrapped)
+    .bind(RAID_TURN_TIMEOUT_SECONDS)
+    .execute(pool)
+    .await?;
+
+    raid_now = match get_raid(pool, raid_id).await? {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    members = get_raid_members(pool, raid_id).await?;
+    Ok(Some(RaidTurnResult {
+        raid: raid_now,
+        members,
+        actor_tg_id,
+        actor_side,
+        log_line,
+        finished: false,
+        winner_side: None,
+    }))
+}
+
+pub async fn raid_apply_rewards(pool: &PgPool, raid: &HuyaRaid, winner_side: Option<&str>) -> Result<i32, AppError> {
+    let members = get_raid_members(pool, raid.id).await?;
+    let target_member = match members.iter().find(|m| m.side == "target") {
+        Some(v) => v,
+        None => return Ok(0),
+    };
+    let (target_huya, _) = get_or_create(pool, raid.chat_id, target_member.tg_id).await?;
+
+    match winner_side {
+        Some("party") => {
+            let raw_pool = ((target_huya.length_mm.max(0) as f64) * RAID_STEAL_CAP_PCT) as i32;
+            let steal_pool = raw_pool.clamp(10, 200);
+            let party: Vec<&HuyaRaidMember> = members.iter().filter(|m| m.side == "party").collect();
+            if party.is_empty() {
+                return Ok(0);
+            }
+            let total_damage: i32 = party.iter().map(|m| m.damage_done.max(0)).sum::<i32>().max(1);
+            let mut distributed = 0_i32;
+            for p in &party {
+                let share = ((steal_pool as f64) * (p.damage_done.max(0) as f64 / total_damage as f64)).round() as i32;
+                let gain = share.max(1);
+                distributed += gain;
+                sqlx::query("UPDATE huya SET length_mm = length_mm + $1, xp = xp + 15 WHERE tg_id = $2")
+                    .bind(gain)
+                    .bind(p.tg_id)
+                    .execute(pool)
+                    .await?;
+            }
+            sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 10) WHERE tg_id = $2")
+                .bind(distributed.min(steal_pool))
+                .bind(target_member.tg_id)
+                .execute(pool)
+                .await?;
+            Ok(distributed.min(steal_pool))
+        }
+        Some("target") => {
+            sqlx::query("UPDATE huya SET xp = xp + 40 WHERE tg_id = $1")
+                .bind(target_member.tg_id)
+                .execute(pool)
+                .await?;
+            Ok(0)
+        }
+        _ => Ok(0),
+    }
 }
 
 // ── Interactive fight (huya_fight table) ─────────────────────────────────────
@@ -1065,6 +2606,8 @@ pub async fn process_round(
 ) -> Result<RoundResult, AppError> {
     let (ch, _) = get_or_create(pool, fight.chat_id, fight.challenger_tg_id).await?;
     let (tg, _) = get_or_create(pool, fight.chat_id, fight.target_tg_id).await?;
+    let ch_fx = equipment_effects_for_player(pool, fight.chat_id, fight.challenger_tg_id).await.unwrap_or_default();
+    let tg_fx = equipment_effects_for_player(pool, fight.chat_id, fight.target_tg_id).await.unwrap_or_default();
 
     let is_tie = ch_pick == tg_pick;
     // RPS: Напор(0) > В шары(2) > Финт(1) > Напор(0)
@@ -1088,9 +2631,11 @@ pub async fn process_round(
             let eternal_mult = 1.0 + winner.skill_eternal as f64 * 0.15;
             let vortex_crit = if fight.round == 1 && winner.skill_vortex > 0 { 1.5 } else { 1.0 };
             let eggtwist_crit = if fight.round % 3 == 0 && winner.skill_eggtwist > 0 { 2.0 } else { 1.0 };
-            let atk_factor = (1.0 + winner.skill_shaft as f64 * 0.04 + winner.atk_boost as f64 / 100.0)
+            let win_fx = if ch_wins_round { ch_fx } else { tg_fx };
+            let lose_fx = if ch_wins_round { tg_fx } else { ch_fx };
+            let atk_factor = (1.0 + winner.skill_shaft as f64 * 0.04 + winner.atk_boost as f64 / 100.0 + win_fx.atk_pct)
                 * berserker_mult * eternal_mult * vortex_crit * eggtwist_crit;
-            let def_factor = (1.0 - loser.skill_skin as f64 * 0.03 - loser.def_boost as f64 / 100.0)
+            let def_factor = (1.0 - loser.skill_skin as f64 * 0.03 - loser.def_boost as f64 / 100.0 - lose_fx.def_pct)
                 .max(0.15) * pierce_factor;
             ((base * atk_factor * def_factor) as i32).max(5)
         };
@@ -1103,6 +2648,13 @@ pub async fn process_round(
 
     let mut new_ch_hp = (fight.ch_hp - ch_damage).max(0);
     let mut new_tg_hp = (fight.tg_hp - tg_damage).max(0);
+    // Thorns-style reflect from equipment traits.
+    if ch_damage > 0 && tg_fx.reflect_pct > 0.0 {
+        new_tg_hp = (new_tg_hp - (ch_damage as f64 * tg_fx.reflect_pct).round() as i32).max(0);
+    }
+    if tg_damage > 0 && ch_fx.reflect_pct > 0.0 {
+        new_ch_hp = (new_ch_hp - (tg_damage as f64 * ch_fx.reflect_pct).round() as i32).max(0);
+    }
 
     // Spirit: heal on round win
     if let Some(winner_tg_id) = round_winner_tg_id {

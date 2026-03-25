@@ -101,6 +101,7 @@ if ! command -v docker &>/dev/null; then echo 'Installing Docker...'; apt-get up
 cd $RemoteDir
 docker load -i $ImageTar
 export TELEGRAM_BOT_TOKEN='$tokenForBash'
+if [ -f .env.watchdog ]; then . .env.watchdog 2>/dev/null || true; fi
 COMPOSE='docker compose -f docker-compose.deploy.yml'; command -v docker-compose &>/dev/null && COMPOSE='docker-compose -f docker-compose.deploy.yml'
 `$COMPOSE up -d
 `$COMPOSE run --rm bot /app/sublime migrate

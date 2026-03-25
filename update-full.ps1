@@ -121,6 +121,7 @@ set -e
 cd $RemoteDir
 docker load -i $ImageTar
 export TELEGRAM_BOT_TOKEN='$tokenForBash'
+if [ -f .env.watchdog ]; then . .env.watchdog 2>/dev/null || true; fi
 COMPOSE='docker compose -f docker-compose.deploy.yml'; command -v docker-compose &>/dev/null && COMPOSE='docker-compose -f docker-compose.deploy.yml'
 `$COMPOSE up -d
 `$COMPOSE run --rm bot /app/sublime migrate || { cat fix_checksum.sql | docker exec -i sublime-postgres psql -U postgres -d sublime_bot -f - 2>/dev/null; `$COMPOSE run --rm bot /app/sublime migrate; }

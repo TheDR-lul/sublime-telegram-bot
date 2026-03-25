@@ -29,6 +29,9 @@ fi
 
 echo "== 3. Restart bot =="
 export TELEGRAM_BOT_TOKEN
+if [ -f .env.watchdog ]; then
+  . .env.watchdog 2>/dev/null || true
+fi
 COMPOSE='docker compose -f docker-compose.deploy.yml'
 command -v docker-compose &>/dev/null && COMPOSE='docker-compose -f docker-compose.deploy.yml'
 $COMPOSE up -d

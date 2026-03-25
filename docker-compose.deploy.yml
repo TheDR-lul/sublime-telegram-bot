@@ -18,6 +18,8 @@ services:
     restart: unless-stopped
     environment:
       TELOXIDE_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      NOTIFICATION_BOT_TOKEN: ${NOTIFICATION_BOT_TOKEN:-}
+      ALERT_CHAT_ID: ${ALERT_CHAT_ID:-}
       DATABASE_URL: postgres://postgres:postgres@db:5432/sublime_bot
       RUST_LOG: info
     depends_on:
