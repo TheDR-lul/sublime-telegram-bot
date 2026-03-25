@@ -4,6 +4,49 @@ use teloxide::types::MessageEntityKind;
 
 use crate::db::user;
 
+/// Telegram MessageEntity offsets/length are defined in UTF-16 code units.
+/// Rust string slices use UTF-8 byte indices, so we must translate boundaries.
+fn utf16_to_byte_index(s: &str, target_cu: usize) -> Option<usize> {
+    if target_cu == 0 {
+        return Some(0);
+    }
+
+    let mut cu = 0usize;
+    for (byte_idx, ch) in s.char_indices() {
+        let ch_cu = ch.len_utf16();
+        let next_cu = cu + ch_cu;
+
+        // If the requested position lands inside this char (surrogate mismatch),
+        // treat it as invalid to avoid slicing panics.
+        if next_cu > target_cu {
+            return None;
+        }
+
+        if next_cu == target_cu {
+            return Some(byte_idx + ch.len_utf8());
+        }
+
+        cu = next_cu;
+    }
+
+    if cu == target_cu {
+        Some(s.len())
+    } else {
+        None
+    }
+}
+
+fn utf16_range_to_byte_range(s: &str, start_cu: usize, len_cu: usize) -> Option<(usize, usize)> {
+    let end_cu = start_cu.checked_add(len_cu)?;
+    let start_b = utf16_to_byte_index(s, start_cu)?;
+    let end_b = utf16_to_byte_index(s, end_cu)?;
+    if start_b <= end_b {
+        Some((start_b, end_b))
+    } else {
+        None
+    }
+}
+
 /// Resolution result for a target Telegram user.
 pub enum ResolvedTarget {
     User(i64),
@@ -46,10 +89,10 @@ async fn resolve_from_entities(
 
     // 2) Plain @mention → look up in DB by username.
     if let (Some(text), Some(e)) = (text, entities.iter().find(|e| matches!(e.kind, MessageEntityKind::Mention))) {
-        let start = e.offset as usize;
-        let end = start.saturating_add(e.length as usize);
-        if start < text.len() && end <= text.len() {
-            let mention = &text[start..end];
+        let start_cu = e.offset as usize;
+        let len_cu = e.length as usize;
+        if let Some((start_b, end_b)) = utf16_range_to_byte_range(text, start_cu, len_cu) {
+            let mention = &text[start_b..end_b];
             let username = mention.trim_start_matches('@').trim();
             if !username.is_empty() {
                 if let Ok(Some(u)) = user::get_by_username(pool, username).await {
