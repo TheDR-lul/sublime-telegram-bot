@@ -579,7 +579,10 @@ status = """🍆 <b>Хуяка {name}:</b> {size} см (Уровень {level})
 ⚡ XP: {xp}/100  |  ❤️ Действий сегодня: {actions_left}/{max_actions}"""
 
 # {name} {size} {actions_left} {hp} {max_hp} {hp_bar}
-status_ass = """🍑 У <b>{name}</b> хуяки нет. Задница: {size} см
+status_pussy = """🌸 <b>{name}</b> в режиме пиздяки. Глубина: {size} см
+💚 HP: {hp}/{max_hp} {hp_bar}  |  ❤️ Действий сегодня: {actions_left}/{max_actions}"""
+# Backward-compatible alias.
+status_ass = """🌸 <b>{name}</b> в режиме пиздяки. Глубина: {size} см
 💚 HP: {hp}/{max_hp} {hp_bar}  |  ❤️ Действий сегодня: {actions_left}/{max_actions}"""
 
 equipment_header = "⚔️ Снаряжение:"
@@ -605,13 +608,26 @@ hint          = "⚔️ <code>/huyafight @user</code> — напасть  |  �
 no_actions_btn = "❤️ Нет действий"
 
 # {name} {grow_cm} {xp} {size}
-grow = "🌱 <b>{name}</b> погладил хуяку: +{grow_cm} см, +{xp} XP. Теперь: {size} см"
+grow = "🌱 <b>{name}</b> погладил хуяку: +{grow_cm} см длины, +{xp} XP. Теперь: {size} см"
 # {name} {grow_cm} {xp} {size} — steroid was active
-grow_boosted = "💉 Стероид! <b>{name}</b> погладил с двойным ростом: +{grow_cm} см, +{xp} XP. Теперь: {size} см"
+grow_boosted = "💉 Стероид! <b>{name}</b> погладил с двойным ростом: +{grow_cm} см длины, +{xp} XP. Теперь: {size} см"
 # {name} {grow_cm} {xp} {level} {size}
-grow_levelup = "🎉 <b>{name}</b> погладил хуяку: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
+grow_levelup = "🎉 <b>{name}</b> погладил хуяку: +{grow_cm} см длины, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
 # {name} {grow_cm} {xp} {level} {size} — steroid + level-up
-grow_levelup_boosted = "💉🎉 Стероид + УРОВЕНЬ UP! <b>{name}</b>: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
+grow_levelup_boosted = "💉🎉 Стероид + УРОВЕНЬ UP! <b>{name}</b>: +{grow_cm} см длины, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
+
+# {name} {grow_cm} {xp} {size}
+grow_pussy = "🌸 <b>{name}</b> прокачал пиздяку: +{grow_cm} см глубины, +{xp} XP. Теперь: {size} см"
+grow_ass = "🌸 <b>{name}</b> прокачал пиздяку: +{grow_cm} см глубины, +{xp} XP. Теперь: {size} см"
+# {name} {grow_cm} {xp} {size}
+grow_boosted_pussy = "💉🌸 Стероид в пиздяку! <b>{name}</b>: +{grow_cm} см глубины, +{xp} XP. Теперь: {size} см"
+grow_boosted_ass = "💉🌸 Стероид в пиздяку! <b>{name}</b>: +{grow_cm} см глубины, +{xp} XP. Теперь: {size} см"
+# {name} {grow_cm} {xp} {level} {size}
+grow_levelup_pussy = "🎉🌸 <b>{name}</b> углубил пиздяку: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
+grow_levelup_ass = "🎉🌸 <b>{name}</b> углубил пиздяку: +{grow_cm} см, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
+# {name} {grow_cm} {xp} {level} {size}
+grow_levelup_boosted_pussy = "💉🎉🌸 Стероид + UP по пиздяке! <b>{name}</b>: +{grow_cm} см глубины, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
+grow_levelup_boosted_ass = "💉🎉🌸 Стероид + UP по пиздяке! <b>{name}</b>: +{grow_cm} см глубины, +{xp} XP. УРОВЕНЬ {level}! (+1 очко навыка)\nТеперь: {size} см"
 
 # Стадии поглаживания друга
 # {attacker} {target}
@@ -631,7 +647,7 @@ pet_no_energy = "🖐 Энергия на поглаживания друзей 
 pet_too_many_friends = "🖐 Сегодня ты уже достаточно друзей погладил (3 уникальных). Больше — завтра."
 pet_self = "🫠 <b>{name}</b> пытается погладить себя через /huyapet. Для себя есть только /huyagrow."
 pet_bot = "🤖 У бота нет хуяки для поглаживания. Потрогай кого-то живого."
-pet_ass = "🍑 Хочешь погладить задницу {target}? Сначала пусть отрастит себе хуяку."
+pet_ass = "🌸 {target} сейчас в режиме пиздяки."
 pet_no_target = "Укажи цель для /huyapet: ответом на сообщение или через /huyapet @user."
 
 # ── Бой (многораундовая мини-игра) ──────────────────────────────────────────
@@ -661,7 +677,9 @@ fight_result_draw = "🤝 Боевая ничья! Оба пережили 5 р�
 fight_declined   = "🏃 <b>{name}</b> слился. Бой отменён."
 fight_no_target  = "Укажи цель: /huyafight @user или ответом на сообщение."
 # {name} {new_size}
-fight_self    = "🫠 <b>{name}</b> засунул хуяку себе в жопу... -0.5 см. Теперь: {new_size} см"
+fight_self    = "🫠 <b>{name}</b> выебал сам себя в мозг... -0.5 см длины. Теперь: {new_size} см"
+fight_self_pussy = "🫠🌸 <b>{name}</b> словил самострел по пиздяке... -0.5 см глубины. Теперь: {new_size} см"
+fight_self_ass = "🫠🌸 <b>{name}</b> словил самострел по пиздяке... -0.5 см глубины. Теперь: {new_size} см"
 fight_self_bot = "🤖 У бота нет хуяки. Иди на живых людей нападай."
 fight_already_pending = "У тебя уже есть активный вызов. Дождись результата."
 fight_not_your_turn = "Это не твой бой!"
@@ -681,7 +699,9 @@ steal_fail_backlash = [
 ]
 steal_no_target = "Укажи цель: /huya steal @user или ответом на сообщение."
 # {name} {new_size}
-steal_self    = "🤦 <b>{name}</b> попытался украсть у себя и засунул себе хуяку в жопу... -0.5 см. Теперь: {new_size} см"
+steal_self    = "🤦 <b>{name}</b> пытался обчистить себя и проебал 0.5 см длины. Теперь: {new_size} см"
+steal_self_pussy = "🤦🌸 <b>{name}</b> попытался украсть у себя и просадил 0.5 см глубины. Теперь: {new_size} см"
+steal_self_ass = "🤦🌸 <b>{name}</b> попытался украсть у себя и просадил 0.5 см глубины. Теперь: {new_size} см"
 steal_self_bot = "🤖 Бот не хранит хуяку. Иди к людям."
 
 # Рейд (пати до 5 vs 1 цель)
@@ -758,7 +778,8 @@ top_header   = "<b>🍆 Топ хуяк (глобально):</b>\n\n"
 # {medal} {name} {size} {level}
 top_entry    = "{medal} <b>{name}</b> — {size} см (ур. {level})\n"
 # {medal} {name} {size}
-top_entry_ass = "{medal} 🍑 <b>{name}</b> — задница {size} см\n"
+top_entry_pussy = "{medal} 🌸 <b>{name}</b> — глубина пиздяки {size} см\n"
+top_entry_ass = "{medal} 🌸 <b>{name}</b> — глубина пиздяки {size} см\n"
 top_empty    = "Никто ещё не вырастил хуяку. Начни с /huyagrow!"
 
 # ── Скиллы (/huyaskills) ─────────────────────────────────────────────────────
@@ -944,7 +965,7 @@ balls_fate_name  = "✨ Яйца Судьбы"
 balls_fate_desc  = "+20% XP за действия. Очень редкий дроп."
 
 [huya.inventory]
-header = "🎒 <b>Инвентарь</b>\n\nНажми на предмет, чтобы экипировать, использовать бустер или продать."
+header = "🎒 <b>Инвентарь</b>\n\nНавигация по телу и переход в список предметов."
 empty  = "Инвентарь пуст. Зайди в /huyashop или лутай кольца в боях."
 equip_btn = "Надеть"
 unequip_btn = "Снять"
@@ -961,3 +982,11 @@ socket_fail = "❌ Инкрустация не удалась (слоты/пре
 reforge_success = "🔥 Перековка успешна: roll {old} → {new}"
 reforge_fail = "🧯 Перековка не удалась. Катализатор сгорел."
 reforge_crit_fail = "💥 Крит-фейл перековки: предмет рассыпался."
+details_title = "🧾 <b>Детали предмета</b>"
+details_back_btn = "◀ Назад"
+details_socket_btn = "💎 Инкруст"
+details_reforge_btn = "🔥 Перековка"
+details_sell_btn = "💰 Продать"
+details_gems_none = "Гемы: —"
+details_gems_prefix = "Гемы:"
+details_locked_suffix = " (заблокировано по длине)"

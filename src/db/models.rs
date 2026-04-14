@@ -225,15 +225,27 @@ impl Huya {
         format!("{}.{}", abs / 10, abs % 10)
     }
 
-    pub fn is_ass(&self) -> bool {
+    pub fn is_pussy(&self) -> bool {
         self.length_mm < 0
+    }
+
+    pub fn is_pizdyaka(&self) -> bool {
+        self.is_pussy()
+    }
+
+    pub fn is_ass(&self) -> bool {
+        self.is_pussy()
     }
 
     /// Maximum HP scales with build size and defensive skills.
     /// This reduces one-shot risk in both normal fights and raids.
     pub fn max_hp(&self) -> i32 {
         let length_hp = self.length_mm.abs() / 5;
-        let base = 100 + length_hp + self.skill_balls * 15;
+        let mut base = 100 + length_hp + self.skill_balls * 15;
+        if self.is_pussy() {
+            // Pizdyaka build is more survivable in prolonged exchanges.
+            base += 20 + self.skill_skin * 2 + self.skill_scales * 2;
+        }
         let eternal_mult = 1.0 + self.skill_eternal as f64 * 0.15;
         (base as f64 * eternal_mult) as i32
     }

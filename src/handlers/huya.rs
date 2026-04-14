@@ -141,8 +141,8 @@ fn equipment_summary(
 fn huya_status_text(h: &Huya, name: &str, equ: &[crate::db::models::HuyaEquipmentSlot], inv: &[crate::db::models::HuyaInventoryItem]) -> String {
     let max_hp = h.max_hp();
     let max_actions = h.max_actions();
-    let base = if h.is_ass() {
-        LOCALE.t_fmt("ru", "huya.status_ass", &[
+    let base = if h.is_pussy() {
+        LOCALE.t_fmt("ru", "huya.status_pussy", &[
             ("name",         &escape_html(name)),
             ("size",         &h.display_cm()),
             ("actions_left", &h.actions_left.to_string()),
@@ -200,12 +200,16 @@ fn actions_available(h: &Huya) -> bool {
 // ── Grow helpers ─────────────────────────────────────────────────────────────
 
 /// Pick the correct locale key for a grow result.
-fn grow_locale_key(leveled_up: bool, boost_active: bool) -> &'static str {
-    match (leveled_up, boost_active) {
-        (true,  true)  => "huya.grow_levelup_boosted",
-        (true,  false) => "huya.grow_levelup",
-        (false, true)  => "huya.grow_boosted",
-        (false, false) => "huya.grow",
+fn grow_locale_key(leveled_up: bool, boost_active: bool, is_pussy: bool) -> &'static str {
+    match (leveled_up, boost_active, is_pussy) {
+        (true,  true, true) => "huya.grow_levelup_boosted_pussy",
+        (true,  false, true) => "huya.grow_levelup_pussy",
+        (false, true, true) => "huya.grow_boosted_pussy",
+        (false, false, true) => "huya.grow_pussy",
+        (true,  true, false)  => "huya.grow_levelup_boosted",
+        (true,  false, false) => "huya.grow_levelup",
+        (false, true, false)  => "huya.grow_boosted",
+        (false, false, false) => "huya.grow",
     }
 }
 
@@ -404,7 +408,7 @@ async fn handle_grow(
     }
 
     let (updated, grow_mm, xp_gain, leveled_up, boost_active) = huya_db::grow(pool, &h).await?;
-    let key = grow_locale_key(leveled_up, boost_active);
+    let key = grow_locale_key(leveled_up, boost_active, updated.is_pussy());
     let text = LOCALE.t_fmt("ru", key, &[
         ("name",     &escape_html(name)),
         ("grow_cm",  &mm_to_cm_str(grow_mm)),
@@ -460,7 +464,7 @@ pub async fn huya_grow_callback(
     }
 
     let (updated, grow_mm, xp_gain, leveled_up, boost_active) = huya_db::grow(&pool, &h).await?;
-    let key = grow_locale_key(leveled_up, boost_active);
+    let key = grow_locale_key(leveled_up, boost_active, updated.is_pussy());
     let answer_text = LOCALE.t_fmt("ru", key, &[
         ("name",    &escape_html(&name)),
         ("grow_cm", &mm_to_cm_str(grow_mm)),
@@ -470,7 +474,11 @@ pub async fn huya_grow_callback(
     ]);
 
     let _ = bot.answer_callback_query(query.id)
-        .text(format!("+{} см", mm_to_cm_str(grow_mm)))
+        .text(format!(
+            "+{} см {}",
+            mm_to_cm_str(grow_mm),
+            if updated.is_pussy() { "глубины" } else { "длины" }
+        ))
         .await;
 
     let equ = huya_db::get_equipment(&pool, chat_id.0, clicker).await.unwrap_or_default();
@@ -520,7 +528,8 @@ async fn handle_fight(
             return Ok(());
         }
         let updated = huya_db::self_fight(pool, chat_id_raw, attacker_tg_id).await?;
-        bot.send_message(chat_id, LOCALE.t_fmt("ru", "huya.fight_self", &[
+        let key = if updated.is_pussy() { "huya.fight_self_pussy" } else { "huya.fight_self" };
+        bot.send_message(chat_id, LOCALE.t_fmt("ru", key, &[
             ("name",     &escape_html(attacker_name)),
             ("new_size", &updated.display_cm()),
         ]))
@@ -1446,7 +1455,8 @@ async fn handle_steal(
             return Ok(());
         }
         let updated = huya_db::self_fight(pool, chat_id_raw, attacker_tg_id).await?;
-        bot.send_message(chat_id, LOCALE.t_fmt("ru", "huya.steal_self", &[
+        let key = if updated.is_pussy() { "huya.steal_self_pussy" } else { "huya.steal_self" };
+        bot.send_message(chat_id, LOCALE.t_fmt("ru", key, &[
             ("name",     &escape_html(attacker_name)),
             ("new_size", &updated.display_cm()),
         ]))
@@ -1539,22 +1549,6 @@ async fn handle_pet_friend(
 
     use huya_db::PetFriendState;
     match result.state {
-        PetFriendState::TargetIsAss => {
-            let target_name = user::get_by_tg_id(pool, target_tg_id)
-                .await?
-                .map(|u| u.full_username(true))
-                .unwrap_or_else(|| "???".to_string());
-            bot.send_message(
-                chat_id,
-                LOCALE.t_fmt(
-                    "ru",
-                    "huya.pet_ass",
-                    &[("target", &escape_html(&target_name))],
-                ),
-            )
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
-        }
         PetFriendState::TooManyFriends => {
             bot.send_message(chat_id, LOCALE.t("ru", "huya.pet_too_many_friends"))
                 .parse_mode(teloxide::types::ParseMode::Html)
@@ -1721,8 +1715,8 @@ pub async fn huyatop_handler(
             .map(|u| u.full_username(false))
             .unwrap_or_else(|| format!("user_{}", tg_id));
         let medal = match i { 0 => "🥇", 1 => "🥈", 2 => "🥉", _ => "•" };
-        let line = if h.is_ass() {
-            LOCALE.t_fmt("ru", "huya.top_entry_ass", &[
+        let line = if h.is_pussy() {
+            LOCALE.t_fmt("ru", "huya.top_entry_pussy", &[
                 ("medal", medal), ("name", &escape_html(&name)), ("size", &h.display_cm()),
             ])
         } else {
@@ -2575,6 +2569,241 @@ pub async fn huya_chest_callback(
 
 // ── Inventory (/huyainv) ──────────────────────────────────────────────────────
 
+// Inventory UI v2 state machine (<= 9 buttons per screen).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InventoryCategory {
+    Equipment,
+    Boosters,
+    Gems,
+    Other,
+}
+
+impl InventoryCategory {
+    fn code(&self) -> &'static str {
+        match self {
+            InventoryCategory::Equipment => "equip",
+            InventoryCategory::Boosters => "booster",
+            InventoryCategory::Gems => "gem",
+            InventoryCategory::Other => "other",
+        }
+    }
+
+    fn from_code(s: &str) -> Self {
+        match s {
+            "equip" => InventoryCategory::Equipment,
+            "booster" => InventoryCategory::Boosters,
+            "gem" => InventoryCategory::Gems,
+            _ => InventoryCategory::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InventoryEquipPart {
+    TipHead,
+    Base,
+    Balls,
+    Rings,
+    Piercing,
+    All,
+}
+
+impl InventoryEquipPart {
+    fn code(&self) -> &'static str {
+        match self {
+            InventoryEquipPart::TipHead => "tip",
+            InventoryEquipPart::Base => "base",
+            InventoryEquipPart::Balls => "balls",
+            InventoryEquipPart::Rings => "rings",
+            InventoryEquipPart::Piercing => "piercing",
+            InventoryEquipPart::All => "all",
+        }
+    }
+
+    fn from_code(s: &str) -> Self {
+        match s {
+            "tip" => InventoryEquipPart::TipHead,
+            "base" => InventoryEquipPart::Base,
+            "balls" => InventoryEquipPart::Balls,
+            "rings" => InventoryEquipPart::Rings,
+            "piercing" => InventoryEquipPart::Piercing,
+            _ => InventoryEquipPart::All,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InvScreen {
+    Overview,
+    EquipPart(InventoryEquipPart),
+    ItemsMenu,
+    ItemsList { category: InventoryCategory, page: usize },
+    ItemDetail { item_id: i32, return_state: String },
+}
+
+fn decode_screen_from_state(state: &str) -> Option<InvScreen> {
+    if state == "o" {
+        return Some(InvScreen::Overview);
+    }
+    if state == "m" {
+        return Some(InvScreen::ItemsMenu);
+    }
+    if let Some(rest) = state.strip_prefix("e_") {
+        return Some(InvScreen::EquipPart(InventoryEquipPart::from_code(rest)));
+    }
+    if let Some(rest) = state.strip_prefix("l_") {
+        let mut p = rest.splitn(2, '_');
+        let cat = p.next().unwrap_or("other");
+        let page = p.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
+        return Some(InvScreen::ItemsList {
+            category: InventoryCategory::from_code(cat),
+            page,
+        });
+    }
+    None
+}
+
+fn parse_screen_from_callback_data(data: &str) -> Option<InvScreen> {
+    let rest = data.strip_prefix("huya_inv_s:")?;
+    // Item detail: huya_inv_s:d:<item_id>:<return_state>
+    if let Some(s) = rest.strip_prefix("d:") {
+        let mut p = s.splitn(2, ':');
+        let item_id = p.next()?.parse::<i32>().ok()?;
+        let return_state = p.next()?.to_string();
+        return Some(InvScreen::ItemDetail { item_id, return_state });
+    }
+
+    if rest == "o" {
+        return Some(InvScreen::Overview);
+    }
+    if rest == "m" {
+        return Some(InvScreen::ItemsMenu);
+    }
+    if let Some(part) = rest.strip_prefix("e_") {
+        return Some(InvScreen::EquipPart(InventoryEquipPart::from_code(part)));
+    }
+    if let Some(list) = rest.strip_prefix("l_") {
+        let mut p = list.splitn(2, '_');
+        let cat = p.next().unwrap_or("other");
+        let page = p.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
+        return Some(InvScreen::ItemsList {
+            category: InventoryCategory::from_code(cat),
+            page,
+        });
+    }
+    None
+}
+
+fn encode_return_state_for_item_detail(return_screen: &InvScreen) -> String {
+    match return_screen {
+        InvScreen::Overview => "o".to_string(),
+        InvScreen::ItemsMenu => "m".to_string(),
+        InvScreen::EquipPart(part) => format!("e_{}", part.code()),
+        InvScreen::ItemsList { category, page } => format!("l_{}_{}", category.code(), page),
+        InvScreen::ItemDetail { return_state, .. } => return_state.clone(),
+    }
+}
+
+fn equip_slots_for_part(part: &InventoryEquipPart) -> Vec<&'static str> {
+    match part {
+        InventoryEquipPart::TipHead => vec!["tip", "piercing_tip_1", "piercing_tip_2", "piercing_tip_3"],
+        InventoryEquipPart::Base => vec!["base", "piercing_base_1", "piercing_base_2"],
+        InventoryEquipPart::Balls => vec!["balls"],
+        InventoryEquipPart::Rings => vec!["ring_1", "ring_2", "ring_3", "ring_4", "ring_5", "ring_6"],
+        InventoryEquipPart::Piercing => vec![
+            "piercing_tip_1",
+            "piercing_tip_2",
+            "piercing_tip_3",
+            "piercing_shaft_1",
+            "piercing_shaft_2",
+            "piercing_shaft_3",
+            "piercing_base_1",
+            "piercing_base_2",
+        ],
+        InventoryEquipPart::All => vec![
+            "tip",
+            "base",
+            "balls",
+            "ring_1",
+            "ring_2",
+            "ring_3",
+            "ring_4",
+            "ring_5",
+            "ring_6",
+            "piercing_tip_1",
+            "piercing_tip_2",
+            "piercing_tip_3",
+            "piercing_shaft_1",
+            "piercing_shaft_2",
+            "piercing_shaft_3",
+            "piercing_base_1",
+            "piercing_base_2",
+        ],
+    }
+}
+
+fn slot_label(slot: &str) -> String {
+    match slot {
+        "tip" => "головка".to_string(),
+        "base" => "основание".to_string(),
+        "balls" => "яйца".to_string(),
+        s if s.starts_with("ring_") => format!("кольцо {}", s.trim_start_matches("ring_")),
+        s if s.starts_with("piercing_tip_") => {
+            format!("пирсинг головки {}", s.trim_start_matches("piercing_tip_"))
+        }
+        s if s.starts_with("piercing_shaft_") => {
+            format!("пирсинг ствола {}", s.trim_start_matches("piercing_shaft_"))
+        }
+        s if s.starts_with("piercing_base_") => {
+            format!("пирсинг основания {}", s.trim_start_matches("piercing_base_"))
+        }
+        _ => slot.to_string(),
+    }
+}
+
+fn equipped_item_labels_by_slot(
+    equ: &[crate::db::models::HuyaEquipmentSlot],
+    inv: &[crate::db::models::HuyaInventoryItem],
+) -> std::collections::HashMap<String, String> {
+    let mut by_slot: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for e in equ {
+        if let Some(item) = inv.iter().find(|i| i.id == e.inventory_id) {
+            by_slot.insert(e.slot.clone(), item_label_ru(&item.item_id));
+        }
+    }
+    by_slot
+}
+
+fn paginate_items_with_boundaries(total_len: usize, boundary: usize, middle: usize) -> Vec<(usize, usize)> {
+    if total_len == 0 {
+        return vec![];
+    }
+    if total_len <= boundary {
+        return vec![(0, total_len)];
+    }
+
+    let mut pages: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0usize;
+
+    // First boundary page.
+    let mut end = (start + boundary).min(total_len);
+    pages.push((start, end));
+    start = end;
+
+    // Middle pages while remaining > boundary.
+    while total_len.saturating_sub(start) > boundary {
+        end = (start + middle).min(total_len);
+        pages.push((start, end));
+        start = end;
+    }
+
+    // Last boundary page.
+    if start < total_len {
+        pages.push((start, total_len));
+    }
+    pages
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InventoryView {
     Overview,
@@ -2606,7 +2835,7 @@ fn view_items<'a>(items: &'a [crate::db::models::HuyaInventoryItem], view: Inven
     }
 }
 
-fn body_equipment_map(
+fn render_slot_list(
     h: &Huya,
     equ: &[crate::db::models::HuyaEquipmentSlot],
     inv: &[crate::db::models::HuyaInventoryItem],
@@ -2623,13 +2852,14 @@ fn body_equipment_map(
         }
         by_slot.get(slot).cloned().unwrap_or_else(|| "—".to_string())
     };
+    // Компактная форма вместо body map: меньше визуального “шума”.
     format!(
-        "🗺 <b>Тело/экип</b>\n\
-         головка: {} | основание: {} | яйца: {}\n\
-         кольца: [1:{}] [2:{}] [3:{}] [4:{}] [5:{}] [6:{}]\n\
-         пирсинг головки: [1:{}] [2:{}] [3:{}]\n\
-         пирсинг ствола: [1:{}] [2:{}] [3:{}]\n\
-         пирсинг основания: [1:{}] [2:{}]",
+        "🗒 <b>Слоты тела</b>\n\
+         гол.: {} | осн.: {} | яйца: {}\n\
+         кольца: 1:{} 2:{} 3:{} 4:{} 5:{} 6:{}\n\
+         пирсинг головки: 1:{} 2:{} 3:{}\n\
+         пирсинг ствола: 1:{} 2:{} 3:{}\n\
+         пирсинг основания: 1:{} 2:{}",
         pick("tip"),
         pick("base"),
         pick("balls"),
@@ -2679,21 +2909,25 @@ fn inventory_keyboard(
         if it.item_kind == "equipment" {
             rows.push(vec![
                 InlineKeyboardButton::callback(
-                    format!("⚙️ #{}", it.id),
-                    format!("huya_inv_equip:{}:{}", it.id, it.slot.clone().unwrap_or_else(|| "ring_1".to_string())),
+                    format!("🔍 #{}", it.id),
+                    format!("huya_inv_detail:{}:{}:{}", it.id, inventory_view_key(view), page),
                 ),
-                InlineKeyboardButton::callback("💎 Инкруст", format!("huya_inv_socket_pick:{}:{}:{}", it.id, inventory_view_key(view), page)),
-                InlineKeyboardButton::callback("🔥 Перековка", format!("huya_inv_reforge_pick:{}:{}:{}", it.id, inventory_view_key(view), page)),
                 InlineKeyboardButton::callback("💰 Продать", format!("huya_inv_sell:{}", it.id)),
             ]);
         } else if it.item_kind == "booster" {
             rows.push(vec![
-                InlineKeyboardButton::callback(format!("💉 Использ. #{}", it.id), format!("huya_inv_use:{}", it.id)),
+                InlineKeyboardButton::callback(
+                    format!("🔍 #{}", it.id),
+                    format!("huya_inv_detail:{}:{}:{}", it.id, inventory_view_key(view), page),
+                ),
                 InlineKeyboardButton::callback("💰 Продать", format!("huya_inv_sell:{}", it.id)),
             ]);
         } else {
             rows.push(vec![
-                InlineKeyboardButton::callback(format!("💎 #{}", it.id), "huya_noop"),
+                InlineKeyboardButton::callback(
+                    format!("🔍 #{}", it.id),
+                    format!("huya_inv_detail:{}:{}:{}", it.id, inventory_view_key(view), page),
+                ),
                 InlineKeyboardButton::callback("💰 Продать", format!("huya_inv_sell:{}", it.id)),
             ]);
         }
@@ -2705,31 +2939,42 @@ fn inventory_keyboard(
     InlineKeyboardMarkup::new(rows)
 }
 
-fn render_inventory_text(
-    h: &Huya,
-    equ: &[crate::db::models::HuyaEquipmentSlot],
+fn inventory_detail_keyboard(item_id: i32, back_view: &str, back_page: usize) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            LOCALE.t("ru", "huya.inventory.details_back_btn"),
+            format!("huya_inv_page:{}:{}", back_view, back_page),
+        )],
+        vec![
+            InlineKeyboardButton::callback(
+                LOCALE.t("ru", "huya.inventory.details_socket_btn"),
+                format!("huya_inv_socket_pick:{}:{}:{}", item_id, back_view, back_page),
+            ),
+            InlineKeyboardButton::callback(
+                LOCALE.t("ru", "huya.inventory.details_reforge_btn"),
+                format!("huya_inv_reforge_pick:{}:{}:{}", item_id, back_view, back_page),
+            ),
+        ],
+        vec![InlineKeyboardButton::callback(
+            LOCALE.t("ru", "huya.inventory.details_sell_btn"),
+            format!("huya_inv_sell:{}", item_id),
+        )],
+    ])
+}
+
+fn render_inventory_items_slice_lines(
     items: &[crate::db::models::HuyaInventoryItem],
     gems: &[crate::db::models::HuyaSocketedGem],
     view: InventoryView,
     page: usize,
-) -> String {
-    if items.is_empty() {
-        return LOCALE.t("ru", "huya.inventory.empty").to_string();
-    }
+) -> Vec<String> {
     let per_page = 6;
     let filtered = view_items(items, view);
     let start = page.saturating_mul(per_page);
     let end = (start + per_page).min(filtered.len());
     let slice = if start >= filtered.len() { &filtered[0..0] } else { &filtered[start..end] };
-    let mut lines = vec![LOCALE.t("ru", "huya.inventory.header").to_string()];
-    if view != InventoryView::Items {
-        lines.push(body_equipment_map(h, equ, items));
-    }
-    lines.push(match view {
-        InventoryView::Overview => "📂 Раздел: Обзор".to_string(),
-        InventoryView::Equip => "📂 Раздел: Экип".to_string(),
-        InventoryView::Items => "📂 Раздел: Предметы".to_string(),
-    });
+
+    let mut lines = Vec::new();
     for it in slice {
         let trait_line = trait_label_ru(it.trait_name.as_deref());
         let used_sockets = gems.iter().filter(|g| g.item_inventory_id == it.id).count();
@@ -2738,6 +2983,7 @@ fn render_inventory_text(
         let rarity_badge = format!("{} {}", rarity_emoji(&it.rarity), rarity_line);
         let item_name = item_label_ru(&it.item_id);
         let kind_line = kind_label_ru(&it.item_kind);
+
         lines.push(format!(
             "#{} <b>{}</b> [{} | {}] {} | трейт:{} | ролл:{} | сокеты:{}/{} | перековка:+{} | цена:{}см",
             it.id,
@@ -2752,6 +2998,7 @@ fn render_inventory_text(
             it.reforge_level.max(0),
             mm_to_cm_str(it.sell_price_mm)
         ));
+
         let sockets: Vec<&crate::db::models::HuyaSocketedGem> =
             gems.iter().filter(|g| g.item_inventory_id == it.id).collect();
         if !sockets.is_empty() {
@@ -2767,7 +3014,542 @@ fn render_inventory_text(
             lines.push(format!("  ↳ гемы: {}", escape_html(&gem_line)));
         }
     }
+    lines
+}
+
+fn render_inventory_overview_text(
+    h: &Huya,
+    equ: &[crate::db::models::HuyaEquipmentSlot],
+    items: &[crate::db::models::HuyaInventoryItem],
+    gems: &[crate::db::models::HuyaSocketedGem],
+    page: usize,
+) -> String {
+    if items.is_empty() {
+        return LOCALE.t("ru", "huya.inventory.empty").to_string();
+    }
+    let mut lines = vec![LOCALE.t("ru", "huya.inventory.header").to_string()];
+    lines.push(render_slot_list(h, equ, items));
+    lines.push("📂 Раздел: Обзор".to_string());
+    lines.extend(render_inventory_items_slice_lines(items, gems, InventoryView::Overview, page));
     lines.join("\n")
+}
+
+fn render_inventory_equip_text(
+    h: &Huya,
+    equ: &[crate::db::models::HuyaEquipmentSlot],
+    items: &[crate::db::models::HuyaInventoryItem],
+    gems: &[crate::db::models::HuyaSocketedGem],
+    page: usize,
+) -> String {
+    if items.is_empty() {
+        return LOCALE.t("ru", "huya.inventory.empty").to_string();
+    }
+    let mut lines = vec![LOCALE.t("ru", "huya.inventory.header").to_string()];
+    // В “Экип” даём короткую подсказку по слотам тела.
+    lines.push(render_slot_list(h, equ, items));
+    lines.push("📂 Раздел: Экип".to_string());
+    lines.extend(render_inventory_items_slice_lines(items, gems, InventoryView::Equip, page));
+    lines.join("\n")
+}
+
+fn render_inventory_items_text(
+    _h: &Huya,
+    _equ: &[crate::db::models::HuyaEquipmentSlot],
+    items: &[crate::db::models::HuyaInventoryItem],
+    gems: &[crate::db::models::HuyaSocketedGem],
+    page: usize,
+) -> String {
+    if items.is_empty() {
+        return LOCALE.t("ru", "huya.inventory.empty").to_string();
+    }
+    let mut lines = vec![LOCALE.t("ru", "huya.inventory.header").to_string()];
+    lines.push("📂 Раздел: Предметы".to_string());
+    lines.extend(render_inventory_items_slice_lines(items, gems, InventoryView::Items, page));
+    lines.join("\n")
+}
+
+fn render_inventory_text(
+    h: &Huya,
+    equ: &[crate::db::models::HuyaEquipmentSlot],
+    items: &[crate::db::models::HuyaInventoryItem],
+    gems: &[crate::db::models::HuyaSocketedGem],
+    view: InventoryView,
+    page: usize,
+) -> String {
+    match view {
+        InventoryView::Overview => render_inventory_overview_text(h, equ, items, gems, page),
+        InventoryView::Equip => render_inventory_equip_text(h, equ, items, gems, page),
+        InventoryView::Items => render_inventory_items_text(h, equ, items, gems, page),
+    }
+}
+
+fn render_item_detail(
+    h: &Huya,
+    _equ: &[crate::db::models::HuyaEquipmentSlot],
+    items: &[crate::db::models::HuyaInventoryItem],
+    gems: &[crate::db::models::HuyaSocketedGem],
+    item_id: i32,
+) -> String {
+    let Some(it) = items.iter().find(|x| x.id == item_id) else {
+        return "Предмет не найден.".to_string();
+    };
+
+    let trait_line = trait_label_ru(it.trait_name.as_deref());
+    let rarity_line = rarity_label_ru(&it.rarity);
+    let rarity_badge = format!("{} {}", rarity_emoji(&it.rarity), rarity_line);
+    let item_name = item_label_ru(&it.item_id);
+    let kind_line = kind_label_ru(&it.item_kind);
+    let slot_line = it.slot.clone().unwrap_or_else(|| "-".to_string());
+
+    let used_sockets = gems.iter().filter(|g| g.item_inventory_id == it.id).count();
+    let slot_unlocked = it
+        .slot
+        .as_deref()
+        .map(|s| huya_db::slot_unlocked_for_length(s, h.length_mm))
+        .unwrap_or(true);
+    let unlocked_badge = if slot_unlocked {
+        ""
+    } else {
+        LOCALE.t("ru", "huya.inventory.details_locked_suffix")
+    };
+
+    let sockets: Vec<&crate::db::models::HuyaSocketedGem> =
+        gems.iter().filter(|g| g.item_inventory_id == it.id).collect();
+    let socket_block = if sockets.is_empty() {
+        LOCALE.t("ru", "huya.inventory.details_gems_none").to_string()
+    } else {
+        let gem_line = sockets
+            .into_iter()
+            .map(|g| {
+                let tr = trait_label_ru(g.gem_trait.as_deref());
+                let gem_name = item_label_ru(&g.gem_item_id);
+                format!("#{}:{}({})+{}", g.socket_index, gem_name, tr, g.gem_roll.max(0))
+            })
+            .collect::<Vec<String>>()
+            .join(" | ");
+        format!(
+            "{} {}",
+            LOCALE.t("ru", "huya.inventory.details_gems_prefix"),
+            escape_html(&gem_line)
+        )
+    };
+
+    format!(
+        "{}\n\
+         {}\n\
+         #{} <b>{}</b>\n\
+         {} | тип: {} | трейт: {}{}\n\
+         слот: {} | ролл: {} | перековка:+{} | сокеты: {}/{}\n\
+         цена: {}см\n\
+         {}\n",
+        LOCALE.t("ru", "huya.inventory.header"),
+        LOCALE.t("ru", "huya.inventory.details_title"),
+        it.id,
+        escape_html(&item_name),
+        rarity_badge,
+        kind_line,
+        escape_html(&trait_line),
+        unlocked_badge,
+        escape_html(&slot_line),
+        it.roll,
+        it.reforge_level.max(0),
+        used_sockets,
+        it.socket_capacity.max(0),
+        mm_to_cm_str(it.sell_price_mm),
+        socket_block
+    )
+}
+
+fn v2_items_by_category<'a>(items: &'a [crate::db::models::HuyaInventoryItem], category: &InventoryCategory) -> Vec<&'a crate::db::models::HuyaInventoryItem> {
+    let kind = match category {
+        InventoryCategory::Equipment => "equipment",
+        InventoryCategory::Boosters => "booster",
+        InventoryCategory::Gems => "gem",
+        InventoryCategory::Other => "other",
+    };
+    match kind {
+        "equipment" => items.iter().filter(|x| x.item_kind == "equipment").collect(),
+        "booster" => items.iter().filter(|x| x.item_kind == "booster").collect(),
+        "gem" => items.iter().filter(|x| x.item_kind == "gem").collect(),
+        _ => items
+            .iter()
+            .filter(|x| x.item_kind != "equipment" && x.item_kind != "booster" && x.item_kind != "gem")
+            .collect(),
+    }
+}
+
+fn v2_items_pagination(total_len: usize) -> Vec<(usize, usize)> {
+    // boundary<=6 items, middle==7 items.
+    paginate_items_with_boundaries(total_len, 6, 7)
+}
+
+fn v2_overview_summary_text(
+    h: &Huya,
+    equ: &[crate::db::models::HuyaEquipmentSlot],
+    items: &[crate::db::models::HuyaInventoryItem],
+) -> String {
+    let mut equipment = 0usize;
+    let mut boosters = 0usize;
+    let mut gems = 0usize;
+    let mut other = 0usize;
+    for it in items {
+        match it.item_kind.as_str() {
+            "equipment" => equipment += 1,
+            "booster" => boosters += 1,
+            "gem" => gems += 1,
+            _ => other += 1,
+        }
+    }
+
+    // Слоты показываем компактно (без “стены” предметов).
+    let slots = render_slot_list(h, equ, items);
+    format!(
+        "{}\n\nЭкип: {} | Бустеры: {} | Гемы: {} | Прочее: {}\n\n{}",
+        LOCALE.t("ru", "huya.inventory.header"),
+        equipment,
+        boosters,
+        gems,
+        other,
+        slots
+    )
+}
+
+fn v2_equip_part_text(
+    h: &Huya,
+    equ: &[crate::db::models::HuyaEquipmentSlot],
+    items: &[crate::db::models::HuyaInventoryItem],
+    part: &InventoryEquipPart,
+) -> String {
+    let by_slot = equipped_item_labels_by_slot(equ, items);
+    let slots = equip_slots_for_part(part);
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("📂 Слоты: {}", match part {
+        InventoryEquipPart::TipHead => "головка",
+        InventoryEquipPart::Base => "основание",
+        InventoryEquipPart::Balls => "яйца",
+        InventoryEquipPart::Rings => "кольца",
+        InventoryEquipPart::Piercing => "пирсинг",
+        InventoryEquipPart::All => "всё тело",
+    }));
+    for s in slots {
+        let unlocked = huya_db::slot_unlocked_for_length(s, h.length_mm);
+        if !unlocked {
+            lines.push(format!("{}: 🔒", slot_label(s)));
+            continue;
+        }
+        let v = by_slot.get(s).cloned().unwrap_or_else(|| "—".to_string());
+        lines.push(format!("{}: {}", slot_label(s), v));
+    }
+
+    lines.join("\n")
+}
+
+fn v2_items_menu_text(items: &[crate::db::models::HuyaInventoryItem]) -> String {
+    let mut equipment = 0usize;
+    let mut boosters = 0usize;
+    let mut gems = 0usize;
+    let mut other = 0usize;
+    for it in items {
+        match it.item_kind.as_str() {
+            "equipment" => equipment += 1,
+            "booster" => boosters += 1,
+            "gem" => gems += 1,
+            _ => other += 1,
+        }
+    }
+    format!(
+        "🏪 <b>Предметы</b>\nЭкип: {} | Бустеры: {} | Гемы: {} | Прочее: {}\nВыбери категорию.",
+        equipment, boosters, gems, other
+    )
+}
+
+fn v2_items_list_text(
+    items: &[crate::db::models::HuyaInventoryItem],
+    category: &InventoryCategory,
+    page: usize,
+    max_page: usize,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!(
+        "🎒 <b>Список</b> — {} | Стр. {} / {}",
+        category.code(),
+        page + 1,
+        max_page + 1
+    ));
+
+    let filtered = v2_items_by_category(items, category);
+    let pages = v2_items_pagination(filtered.len());
+    let (start, end) = pages.get(page).copied().unwrap_or((0, 0));
+    for it in filtered.get(start..end).unwrap_or(&[]) {
+        let name = item_label_ru(&it.item_id);
+        let rarity = rarity_label_ru(&it.rarity);
+        let badge = format!("{} {}", rarity_emoji(&it.rarity), rarity);
+        let trait_line = trait_label_ru(it.trait_name.as_deref());
+        lines.push(format!(
+            "#{} <b>{}</b> {} | {}",
+            it.id,
+            escape_html(&name),
+            badge,
+            escape_html(&trait_line)
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn v2_back_to_state_code(state: &InvScreen) -> String {
+    encode_state_for_callback(state)
+}
+
+fn encode_state_for_callback(screen: &InvScreen) -> String {
+    match screen {
+        InvScreen::Overview => "o".to_string(),
+        InvScreen::ItemsMenu => "m".to_string(),
+        InvScreen::EquipPart(part) => format!("e_{}", part.code()),
+        InvScreen::ItemsList { category, page } => format!("l_{}_{}", category.code(), page),
+        InvScreen::ItemDetail { return_state, .. } => return_state.clone(),
+    }
+}
+
+fn v2_keyboard_overview() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback("Обзор", "huya_inv_s:o"),
+            InlineKeyboardButton::callback("Экип", "huya_inv_s:e_all"),
+            InlineKeyboardButton::callback("Предметы", "huya_inv_s:m"),
+        ],
+        vec![
+            InlineKeyboardButton::callback("Головка", "huya_inv_s:e_tip"),
+            InlineKeyboardButton::callback("Основание", "huya_inv_s:e_base"),
+            InlineKeyboardButton::callback("Яйца", "huya_inv_s:e_balls"),
+        ],
+        vec![
+            InlineKeyboardButton::callback("Кольца", "huya_inv_s:e_rings"),
+            InlineKeyboardButton::callback("Пирсинг", "huya_inv_s:e_piercing"),
+            InlineKeyboardButton::callback("Все", "huya_inv_s:e_all"),
+        ],
+    ])
+}
+
+fn v2_keyboard_equip_part(part: &InventoryEquipPart) -> InlineKeyboardMarkup {
+    let mark = |label: &str, code: &str, active: bool| -> String {
+        if active {
+            format!("• {}", label)
+        } else {
+            label.to_string()
+        }
+        };
+    let active_tip = matches!(part, InventoryEquipPart::TipHead);
+    let active_base = matches!(part, InventoryEquipPart::Base);
+    let active_balls = matches!(part, InventoryEquipPart::Balls);
+    let active_rings = matches!(part, InventoryEquipPart::Rings);
+    let active_piercing = matches!(part, InventoryEquipPart::Piercing);
+    let active_all = matches!(part, InventoryEquipPart::All);
+
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback("Обзор", "huya_inv_s:o"),
+            InlineKeyboardButton::callback("Экип", "huya_inv_s:e_all"),
+            InlineKeyboardButton::callback("Предметы", "huya_inv_s:m"),
+        ],
+        vec![
+            InlineKeyboardButton::callback(mark("Головка", "tip", active_tip).as_str(), "huya_inv_s:e_tip"),
+            InlineKeyboardButton::callback(mark("Основание", "base", active_base).as_str(), "huya_inv_s:e_base"),
+            InlineKeyboardButton::callback(mark("Яйца", "balls", active_balls).as_str(), "huya_inv_s:e_balls"),
+        ],
+        vec![
+            InlineKeyboardButton::callback(mark("Кольца", "rings", active_rings).as_str(), "huya_inv_s:e_rings"),
+            InlineKeyboardButton::callback(mark("Пирсинг", "piercing", active_piercing).as_str(), "huya_inv_s:e_piercing"),
+            InlineKeyboardButton::callback(mark("Все", "all", active_all).as_str(), "huya_inv_s:e_all"),
+        ],
+    ])
+}
+
+fn v2_keyboard_items_menu() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback("Обзор", "huya_inv_s:o"),
+            InlineKeyboardButton::callback("Экип", "huya_inv_s:e_all"),
+            InlineKeyboardButton::callback("Предметы", "huya_inv_s:m"),
+        ],
+        vec![
+            InlineKeyboardButton::callback("Экип", "huya_inv_s:l_equip_0"),
+            InlineKeyboardButton::callback("Бустеры", "huya_inv_s:l_booster_0"),
+        ],
+        vec![
+            InlineKeyboardButton::callback("Гемы", "huya_inv_s:l_gem_0"),
+            InlineKeyboardButton::callback("Прочее", "huya_inv_s:l_other_0"),
+        ],
+    ])
+}
+
+fn v2_keyboard_items_list(
+    items: &[crate::db::models::HuyaInventoryItem],
+    category: &InventoryCategory,
+    page: usize,
+) -> InlineKeyboardMarkup {
+    let filtered = v2_items_by_category(items, category);
+    let pages = v2_items_pagination(filtered.len());
+    let last_page = pages.len().saturating_sub(1);
+    let page = page.min(last_page);
+    let (start, end) = pages
+        .get(page)
+        .copied()
+        .unwrap_or((0, filtered.len()));
+
+    let slice = filtered.get(start..end).unwrap_or(&[]);
+    let return_state = format!("l_{}_{}", category.code(), page);
+
+    // Build item buttons (count is what matters for Telegram: <=9 total per screen).
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    let mut i = 0usize;
+    let per_row = 2usize;
+    while i < slice.len() {
+        let mut row: Vec<InlineKeyboardButton> = Vec::new();
+        for _ in 0..per_row {
+            if i >= slice.len() {
+                break;
+            }
+            let it = slice[i].clone();
+            row.push(InlineKeyboardButton::callback(
+                format!("🔍 #{}", it.id),
+                format!("huya_inv_s:d:{}:{}", it.id, return_state),
+            ));
+            i += 1;
+        }
+        rows.push(row);
+    }
+
+    // Pagination controls (tabs hidden on list screens).
+    if pages.len() <= 1 {
+        // Only one page: show back only (it is both first and last).
+        rows.push(vec![InlineKeyboardButton::callback("◀ Назад", "huya_inv_s:m")]);
+    } else if page == 0 {
+        rows.push(vec![
+            InlineKeyboardButton::callback("◀ Назад", "huya_inv_s:m"),
+            InlineKeyboardButton::callback("▶", format!("huya_inv_s:l_{}_{}", category.code(), page + 1)),
+        ]);
+    } else if page == last_page {
+        rows.push(vec![
+            InlineKeyboardButton::callback("◀", format!("huya_inv_s:l_{}_{}", category.code(), page.saturating_sub(1))),
+            InlineKeyboardButton::callback("◀ Назад", "huya_inv_s:m"),
+        ]);
+    } else {
+        rows.push(vec![
+            InlineKeyboardButton::callback("◀", format!("huya_inv_s:l_{}_{}", category.code(), page - 1)),
+            InlineKeyboardButton::callback("▶", format!("huya_inv_s:l_{}_{}", category.code(), page + 1)),
+        ]);
+    }
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+fn v2_keyboard_item_detail(
+    item: &crate::db::models::HuyaInventoryItem,
+    equipped: Option<&crate::db::models::HuyaEquipmentSlot>,
+    return_state: &InvScreen,
+) -> InlineKeyboardMarkup {
+    let return_state_code = match return_state {
+        InvScreen::ItemDetail { return_state, .. } => return_state.clone(),
+        InvScreen::Overview => "o".to_string(),
+        InvScreen::ItemsMenu => "m".to_string(),
+        InvScreen::EquipPart(part) => format!("e_{}", part.code()),
+        InvScreen::ItemsList { category, page } => format!("l_{}_{}", category.code(), page),
+        InvScreen::ItemDetail { .. } => "o".to_string(),
+    };
+
+    let back_btn = InlineKeyboardButton::callback("◀ Назад", format!("huya_inv_s:{}", return_state_code));
+
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    rows.push(vec![back_btn]);
+
+    // Actions depend on item kind.
+    if item.item_kind == "equipment" {
+        let sell_btn = InlineKeyboardButton::callback(
+            "💰 Продать",
+            format!("huya_inv_sell:{}:{}", item.id, return_state_code),
+        );
+
+        let equip_action = if equipped.is_some() {
+            let slot = equipped.unwrap().slot.clone();
+            InlineKeyboardButton::callback(
+                "Снять",
+                format!("huya_inv_unequip:{}:{}", slot, return_state_code),
+            )
+        } else {
+            // Equipment item should have its target slot.
+            let slot = item.slot.as_deref().unwrap_or("tip");
+            InlineKeyboardButton::callback(
+                "Надеть",
+                format!("huya_inv_equip:{}:{}:{}", item.id, slot, return_state_code),
+            )
+        };
+
+        rows.push(vec![equip_action, sell_btn]);
+
+        // Socket/reforge actions (only for equipment).
+        rows.push(vec![
+            InlineKeyboardButton::callback(
+                "💎 Инкруст",
+                format!("huya_inv_socket_pick:{}:{}", item.id, return_state_code),
+            ),
+            InlineKeyboardButton::callback(
+                "🔥 Перековка",
+                format!("huya_inv_reforge_pick:{}:{}", item.id, return_state_code),
+            ),
+        ]);
+    } else if item.item_kind == "booster" {
+        let use_btn = InlineKeyboardButton::callback(
+            "⚡ Использовать",
+            format!("huya_inv_use:{}:{}", item.id, return_state_code),
+        );
+        let sell_btn = InlineKeyboardButton::callback(
+            "💰 Продать",
+            format!("huya_inv_sell:{}:{}", item.id, return_state_code),
+        );
+        rows.push(vec![use_btn, sell_btn]);
+    } else {
+        let sell_btn = InlineKeyboardButton::callback(
+            "💰 Продать",
+            format!("huya_inv_sell:{}:{}", item.id, return_state_code),
+        );
+        rows.push(vec![sell_btn]);
+    }
+
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub async fn huyainv_handler_legacy(
+    bot: Bot,
+    msg: Message,
+    _: crate::handlers::commands::Cmd,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    if !msg.chat.is_group() && !msg.chat.is_supergroup() {
+        return Ok(());
+    }
+    let from = match msg.from.as_ref() {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+    let tg_id = from.id.0 as i64;
+    let (h, _) = huya_db::get_or_create(&pool, msg.chat.id.0, tg_id).await?;
+    let equ = huya_db::get_equipment(&pool, msg.chat.id.0, tg_id).await?;
+    let items = huya_db::get_inventory(&pool, msg.chat.id.0, tg_id).await?;
+    let gems = huya_db::all_socketed_gems_for_player(&pool, msg.chat.id.0, tg_id).await?;
+
+    let text = v2_overview_summary_text(&h, &equ, &items);
+    let mut req = bot
+        .send_message(msg.chat.id, text)
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .reply_markup(v2_keyboard_overview());
+    if let Some(thread) = topic_thread_id(&msg) {
+        req = req.message_thread_id(thread);
+    }
+    req.await?;
+    let _ = gems; // keep fetched to avoid changing query pattern too much for now.
+    Ok(())
 }
 
 pub async fn huyainv_handler(
@@ -2810,142 +3592,294 @@ pub async fn huya_inventory_callback(
     };
     let chat_id_raw = msg_ref.chat().id.0;
 
+    if data == "huya_noop" {
+        let _ = bot.answer_callback_query(qid.clone()).await;
+        return Ok(());
+    }
+
+    let mut screen_to_render: Option<InvScreen> = None;
+
+    // ── Actions (all of them re-render to `screen_to_render`)
     if let Some(rest) = data.strip_prefix("huya_inv_sell:") {
-        if let Ok(inv_id) = rest.parse::<i32>()
-            && let Some(mm) = huya_db::sell_inventory_item(&pool, chat_id_raw, clicker, inv_id).await?
-        {
-            let _ = bot.answer_callback_query(qid.clone())
-                .text(LOCALE.t_fmt("ru", "huya.inventory.sell_success", &[("item", &inv_id.to_string()), ("refund", &mm_to_cm_str(mm))]))
-                .await;
+        let p: Vec<&str> = rest.splitn(2, ':').collect();
+        if p.len() == 2 {
+            if let Ok(inv_id) = p[0].parse::<i32>() {
+                let return_state = p[1];
+                if let Some(mm) = huya_db::sell_inventory_item(&pool, chat_id_raw, clicker, inv_id).await? {
+                    let _ = bot
+                        .answer_callback_query(qid.clone())
+                        .text(LOCALE.t_fmt(
+                            "ru",
+                            "huya.inventory.sell_success",
+                            &[
+                                ("item", &inv_id.to_string()),
+                                ("refund", &mm_to_cm_str(mm)),
+                            ],
+                        ))
+                        .await;
+                } else {
+                    let _ = bot.answer_callback_query(qid.clone()).await;
+                }
+                screen_to_render = decode_screen_from_state(return_state);
+            }
+        } else if let Ok(inv_id) = rest.parse::<i32>() {
+            // Legacy callback: just render overview.
+            let _ = huya_db::sell_inventory_item(&pool, chat_id_raw, clicker, inv_id).await?;
+            let _ = bot.answer_callback_query(qid.clone()).await;
+            screen_to_render = Some(InvScreen::Overview);
         }
     } else if let Some(rest) = data.strip_prefix("huya_inv_use:") {
-        if let Ok(inv_id) = rest.parse::<i32>() {
-            if let Some((effect, val)) = huya_db::use_booster_item(&pool, chat_id_raw, clicker, inv_id).await? {
-                let _ = bot.answer_callback_query(qid.clone())
-                    .text(LOCALE.t_fmt("ru", "huya.inventory.use_success", &[("effect", &effect), ("value", &val.to_string())]))
-                    .await;
-            } else {
-                let _ = bot.answer_callback_query(qid.clone()).text(LOCALE.t("ru", "huya.inventory.use_fail")).await;
+        let p: Vec<&str> = rest.splitn(2, ':').collect();
+        if p.len() == 2 {
+            if let Ok(inv_id) = p[0].parse::<i32>() {
+                let return_state = p[1];
+                if let Some((effect, val)) =
+                    huya_db::use_booster_item(&pool, chat_id_raw, clicker, inv_id).await?
+                {
+                    let _ = bot
+                        .answer_callback_query(qid.clone())
+                        .text(LOCALE.t_fmt(
+                            "ru",
+                            "huya.inventory.use_success",
+                            &[("effect", &effect), ("value", &val.to_string())],
+                        ))
+                        .await;
+                } else {
+                    let _ = bot.answer_callback_query(qid.clone()).text(LOCALE.t("ru", "huya.inventory.use_fail")).await;
+                }
+                screen_to_render = decode_screen_from_state(return_state);
             }
+        } else if let Ok(inv_id) = rest.parse::<i32>() {
+            // Legacy callback: render overview.
+            let _ = huya_db::use_booster_item(&pool, chat_id_raw, clicker, inv_id).await?;
+            let _ = bot.answer_callback_query(qid.clone()).await;
+            screen_to_render = Some(InvScreen::Overview);
         }
     } else if let Some(rest) = data.strip_prefix("huya_inv_equip:") {
-        let p: Vec<&str> = rest.splitn(2, ':').collect();
-        if p.len() == 2
-            && let Ok(inv_id) = p[0].parse::<i32>()
-        {
-            let ok = huya_db::equip_item(&pool, chat_id_raw, clicker, p[1], inv_id).await?;
-            let _ = bot.answer_callback_query(qid.clone())
-                .text(if ok { LOCALE.t("ru", "huya.inventory.equip_success") } else { LOCALE.t("ru", "huya.inventory.equip_fail") })
-                .await;
+        // Format: huya_inv_equip:{inv_id}:{slot}:{return_state}
+        let p: Vec<&str> = rest.splitn(3, ':').collect();
+        if p.len() == 3 {
+            if let Ok(inv_id) = p[0].parse::<i32>() {
+                let slot = p[1];
+                let return_state = p[2];
+                let ok = huya_db::equip_item(&pool, chat_id_raw, clicker, slot, inv_id).await?;
+                let _ = bot
+                    .answer_callback_query(qid.clone())
+                    .text(if ok {
+                        LOCALE.t("ru", "huya.inventory.equip_success")
+                    } else {
+                        LOCALE.t("ru", "huya.inventory.equip_fail")
+                    })
+                    .await;
+                screen_to_render = decode_screen_from_state(return_state);
+            }
         }
     } else if let Some(rest) = data.strip_prefix("huya_inv_unequip:") {
-        let ok = huya_db::unequip_item(&pool, chat_id_raw, clicker, rest).await?;
-        let _ = bot.answer_callback_query(qid.clone())
-            .text(if ok { LOCALE.t("ru", "huya.inventory.unequip_success") } else { LOCALE.t("ru", "huya.inventory.equip_fail") })
-            .await;
+        // Format: huya_inv_unequip:{slot}:{return_state}
+        let p: Vec<&str> = rest.splitn(2, ':').collect();
+        if p.len() == 2 {
+            let slot = p[0];
+            let return_state = p[1];
+            let ok = huya_db::unequip_item(&pool, chat_id_raw, clicker, slot).await?;
+            let _ = bot
+                .answer_callback_query(qid.clone())
+                .text(if ok {
+                    LOCALE.t("ru", "huya.inventory.unequip_success")
+                } else {
+                    LOCALE.t("ru", "huya.inventory.equip_fail")
+                })
+                .await;
+            screen_to_render = decode_screen_from_state(return_state);
+        }
     } else if let Some(rest) = data.strip_prefix("huya_inv_socket_pick:") {
-        let p: Vec<&str> = rest.splitn(3, ':').collect();
-        if p.len() == 3 && let Ok(item_id) = p[0].parse::<i32>() {
-            let view = parse_inventory_view(p[1]);
-            let page = p[2].parse::<usize>().unwrap_or(0);
-            let gems = huya_db::available_gems(&pool, chat_id_raw, clicker).await?;
-            if gems.is_empty() {
-                let _ = bot.answer_callback_query(qid.clone()).text(LOCALE.t("ru", "huya.inventory.no_gems")).await;
-            } else {
-                let mut rows: Vec<Vec<InlineKeyboardButton>> = gems.into_iter().take(8).map(|g| {
-                    vec![InlineKeyboardButton::callback(
-                        format!("💎 {} {} +{}", rarity_emoji(&g.rarity), item_label_ru(&g.item_id), g.roll.max(0)),
-                        format!("huya_inv_socket_do:{}:{}:{}:{}", item_id, g.id, inventory_view_key(view), page),
-                    )]
-                }).collect();
-                rows.push(vec![InlineKeyboardButton::callback("↩ Назад", format!("huya_inv_page:{}:{page}", inventory_view_key(view)))]);
+        // Format: huya_inv_socket_pick:{item_id}:{return_state}
+        let p: Vec<&str> = rest.splitn(2, ':').collect();
+        if p.len() == 2 {
+            if let Ok(item_id) = p[0].parse::<i32>() {
+                let return_state = p[1];
+                let gems = huya_db::available_gems(&pool, chat_id_raw, clicker).await?;
+                if gems.is_empty() {
+                    let _ = bot
+                        .answer_callback_query(qid.clone())
+                        .text(LOCALE.t("ru", "huya.inventory.no_gems"))
+                        .await;
+                    return Ok(());
+                }
+
+                let mut rows: Vec<Vec<InlineKeyboardButton>> = gems
+                    .into_iter()
+                    .take(8)
+                    .map(|g| {
+                        vec![InlineKeyboardButton::callback(
+                            format!(
+                                "💎 {} {} +{}",
+                                rarity_emoji(&g.rarity),
+                                item_label_ru(&g.item_id),
+                                g.roll.max(0)
+                            ),
+                            format!("huya_inv_socket_do:{}:{}:{}", item_id, g.id, return_state),
+                        )]
+                    })
+                    .collect();
+
+                rows.push(vec![InlineKeyboardButton::callback(
+                    "↩ Назад",
+                    format!("huya_inv_s:{}", return_state),
+                )]);
+
                 let _ = bot.answer_callback_query(qid.clone()).await;
-                let _ = bot.edit_message_reply_markup(msg_ref.chat().id, msg_ref.id())
+                let _ = bot
+                    .edit_message_reply_markup(msg_ref.chat().id, msg_ref.id())
                     .reply_markup(InlineKeyboardMarkup::new(rows))
                     .await;
                 return Ok(());
             }
         }
     } else if let Some(rest) = data.strip_prefix("huya_inv_socket_do:") {
-        let p: Vec<&str> = rest.splitn(4, ':').collect();
-        if p.len() == 4
-            && let Ok(item_id) = p[0].parse::<i32>()
-            && let Ok(gem_id) = p[1].parse::<i32>()
-        {
-            let ok = huya_db::socket_gem_into_item(&pool, chat_id_raw, clicker, item_id, gem_id).await?;
-            let _ = bot.answer_callback_query(qid.clone())
-                .text(if ok { LOCALE.t("ru", "huya.inventory.socket_success") } else { LOCALE.t("ru", "huya.inventory.socket_fail") })
-                .await;
+        // Format: huya_inv_socket_do:{item_id}:{gem_id}:{return_state}
+        let p: Vec<&str> = rest.splitn(3, ':').collect();
+        if p.len() == 3 {
+            if let Ok(item_id) = p[0].parse::<i32>() && let Ok(gem_id) = p[1].parse::<i32>() {
+                let return_state = p[2];
+                let ok = huya_db::socket_gem_into_item(&pool, chat_id_raw, clicker, item_id, gem_id).await?;
+                let _ = bot
+                    .answer_callback_query(qid.clone())
+                    .text(if ok {
+                        LOCALE.t("ru", "huya.inventory.socket_success")
+                    } else {
+                        LOCALE.t("ru", "huya.inventory.socket_fail")
+                    })
+                    .await;
+                screen_to_render = decode_screen_from_state(return_state);
+            }
         }
     } else if let Some(rest) = data.strip_prefix("huya_inv_reforge_pick:") {
-        let p: Vec<&str> = rest.splitn(3, ':').collect();
-        if p.len() == 3 && let Ok(item_id) = p[0].parse::<i32>() {
-            let view = parse_inventory_view(p[1]);
-            let page = p[2].parse::<usize>().unwrap_or(0);
-            let gems = huya_db::available_gems(&pool, chat_id_raw, clicker).await?;
-            if gems.is_empty() {
-                let _ = bot.answer_callback_query(qid.clone()).text(LOCALE.t("ru", "huya.inventory.no_gems")).await;
-            } else {
-                let mut rows: Vec<Vec<InlineKeyboardButton>> = gems.into_iter().take(8).map(|g| {
-                    vec![InlineKeyboardButton::callback(
-                        format!("🧪 {} {} +{}", rarity_emoji(&g.rarity), item_label_ru(&g.item_id), g.roll.max(0)),
-                        format!("huya_inv_reforge_do:{}:{}:{}:{}", item_id, g.id, inventory_view_key(view), page),
-                    )]
-                }).collect();
-                rows.push(vec![InlineKeyboardButton::callback("↩ Назад", format!("huya_inv_page:{}:{page}", inventory_view_key(view)))]);
+        // Format: huya_inv_reforge_pick:{item_id}:{return_state}
+        let p: Vec<&str> = rest.splitn(2, ':').collect();
+        if p.len() == 2 {
+            if let Ok(item_id) = p[0].parse::<i32>() {
+                let return_state = p[1];
+                let gems = huya_db::available_gems(&pool, chat_id_raw, clicker).await?;
+                if gems.is_empty() {
+                    let _ = bot
+                        .answer_callback_query(qid.clone())
+                        .text(LOCALE.t("ru", "huya.inventory.no_gems"))
+                        .await;
+                    return Ok(());
+                }
+
+                let mut rows: Vec<Vec<InlineKeyboardButton>> = gems
+                    .into_iter()
+                    .take(8)
+                    .map(|g| {
+                        vec![InlineKeyboardButton::callback(
+                            format!(
+                                "🧪 {} {} +{}",
+                                rarity_emoji(&g.rarity),
+                                item_label_ru(&g.item_id),
+                                g.roll.max(0)
+                            ),
+                            format!(
+                                "huya_inv_reforge_do:{}:{}:{}",
+                                item_id, g.id, return_state
+                            ),
+                        )]
+                    })
+                    .collect();
+
+                rows.push(vec![InlineKeyboardButton::callback(
+                    "↩ Назад",
+                    format!("huya_inv_s:{}", return_state),
+                )]);
+
                 let _ = bot.answer_callback_query(qid.clone()).await;
-                let _ = bot.edit_message_reply_markup(msg_ref.chat().id, msg_ref.id())
+                let _ = bot
+                    .edit_message_reply_markup(msg_ref.chat().id, msg_ref.id())
                     .reply_markup(InlineKeyboardMarkup::new(rows))
                     .await;
                 return Ok(());
             }
         }
     } else if let Some(rest) = data.strip_prefix("huya_inv_reforge_do:") {
-        let p: Vec<&str> = rest.splitn(4, ':').collect();
-        if p.len() == 4
-            && let Ok(item_id) = p[0].parse::<i32>()
-            && let Ok(gem_id) = p[1].parse::<i32>()
-        {
-            if let Some(res) = huya_db::reforge_item_with_gem(&pool, chat_id_raw, clicker, item_id, gem_id).await? {
-                let text = match res.outcome {
-                    huya_db::ReforgeOutcome::Success => LOCALE.t_fmt("ru", "huya.inventory.reforge_success", &[("old", &res.old_roll.to_string()), ("new", &res.new_roll.to_string())]),
-                    huya_db::ReforgeOutcome::Fail => LOCALE.t("ru", "huya.inventory.reforge_fail").to_string(),
-                    huya_db::ReforgeOutcome::CritFail => LOCALE.t("ru", "huya.inventory.reforge_crit_fail").to_string(),
-                };
-                let _ = bot.answer_callback_query(qid.clone()).text(text).await;
-            } else {
-                let _ = bot.answer_callback_query(qid.clone()).text(LOCALE.t("ru", "huya.inventory.reforge_fail")).await;
+        // Format: huya_inv_reforge_do:{item_id}:{gem_id}:{return_state}
+        let p: Vec<&str> = rest.splitn(3, ':').collect();
+        if p.len() == 3 {
+            if let Ok(item_id) = p[0].parse::<i32>() && let Ok(gem_id) = p[1].parse::<i32>() {
+                let return_state = p[2];
+                if let Some(res) = huya_db::reforge_item_with_gem(&pool, chat_id_raw, clicker, item_id, gem_id).await? {
+                    let text = match res.outcome {
+                        huya_db::ReforgeOutcome::Success => LOCALE.t_fmt(
+                            "ru",
+                            "huya.inventory.reforge_success",
+                            &[("old", &res.old_roll.to_string()), ("new", &res.new_roll.to_string())],
+                        ),
+                        huya_db::ReforgeOutcome::Fail => LOCALE.t("ru", "huya.inventory.reforge_fail").to_string(),
+                        huya_db::ReforgeOutcome::CritFail => LOCALE.t("ru", "huya.inventory.reforge_crit_fail").to_string(),
+                    };
+                    let _ = bot.answer_callback_query(qid.clone()).text(text).await;
+                } else {
+                    let _ = bot.answer_callback_query(qid.clone()).text(LOCALE.t("ru", "huya.inventory.reforge_fail")).await;
+                }
+                screen_to_render = decode_screen_from_state(return_state);
             }
         }
-    } else if data == "huya_noop" {
-        let _ = bot.answer_callback_query(qid.clone()).await;
     }
 
-    let (view, page) = if let Some(rest) = data.strip_prefix("huya_inv_view:") {
-        let p: Vec<&str> = rest.splitn(2, ':').collect();
-        let v = parse_inventory_view(p.first().copied().unwrap_or("overview"));
-        let pg = p.get(1).and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-        (v, pg)
-    } else if let Some(rest) = data.strip_prefix("huya_inv_page:") {
-        let p: Vec<&str> = rest.splitn(2, ':').collect();
-        if p.len() == 1 {
-            (InventoryView::Overview, p[0].parse::<usize>().unwrap_or(0))
-        } else {
-            let v = parse_inventory_view(p.first().copied().unwrap_or("overview"));
-            let pg = p.get(1).and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-            (v, pg)
-        }
-    } else {
-        (InventoryView::Overview, 0)
-    };
+    // ── Navigation (huya_inv_s:*)
+    if screen_to_render.is_none() {
+        screen_to_render = parse_screen_from_callback_data(data);
+    }
+    let screen_to_render = screen_to_render.unwrap_or(InvScreen::Overview);
+
     let (h, _) = huya_db::get_or_create(&pool, chat_id_raw, clicker).await?;
     let equ = huya_db::get_equipment(&pool, chat_id_raw, clicker).await?;
     let items = huya_db::get_inventory(&pool, chat_id_raw, clicker).await?;
     let gems = huya_db::all_socketed_gems_for_player(&pool, chat_id_raw, clicker).await?;
-    let text = render_inventory_text(&h, &equ, &items, &gems, view, page);
-    let _ = bot.edit_message_text(msg_ref.chat().id, msg_ref.id(), text)
+
+    let (text, keyboard) = match &screen_to_render {
+        InvScreen::Overview => (
+            v2_overview_summary_text(&h, &equ, &items),
+            v2_keyboard_overview(),
+        ),
+        InvScreen::EquipPart(part) => (
+            v2_equip_part_text(&h, &equ, &items, part),
+            v2_keyboard_equip_part(part),
+        ),
+        InvScreen::ItemsMenu => (
+            v2_items_menu_text(&items),
+            v2_keyboard_items_menu(),
+        ),
+        InvScreen::ItemsList { category, page } => {
+            let filtered = v2_items_by_category(&items, category);
+            let pages = v2_items_pagination(filtered.len());
+            let last_page = pages.len().saturating_sub(1);
+            let page = (*page).min(last_page);
+            let text = v2_items_list_text(&items, category, page, last_page);
+            let keyboard = v2_keyboard_items_list(&items, category, page);
+            (text, keyboard)
+        }
+        InvScreen::ItemDetail { item_id, return_state } => {
+            let item = items.iter().find(|x| x.id == *item_id);
+            let equipped = equ.iter().find(|s| s.inventory_id == *item_id);
+            let text = render_item_detail(&h, &equ, &items, &gems, *item_id);
+            let keyboard = if let Some(it) = item {
+                let screen_copy = InvScreen::ItemDetail {
+                    item_id: *item_id,
+                    return_state: return_state.clone(),
+                };
+                v2_keyboard_item_detail(it, equipped, &screen_copy)
+            } else {
+                // Fallback: item vanished, back to overview.
+                v2_keyboard_overview()
+            };
+            (text, keyboard)
+        }
+    };
+
+    let _ = bot
+        .edit_message_text(msg_ref.chat().id, msg_ref.id(), text)
         .parse_mode(teloxide::types::ParseMode::Html)
-        .reply_markup(inventory_keyboard(&items, view, page))
+        .reply_markup(keyboard)
         .await;
     Ok(())
 }

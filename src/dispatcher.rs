@@ -214,7 +214,8 @@ async fn callback_router(
     {
         return huya_handler::huya_chest_callback(bot, query, pool).await;
     }
-    if data.starts_with("huya_inv_page:") || data.starts_with("huya_inv_view:")
+    if data.starts_with("huya_inv_s:") || data.starts_with("huya_inv_page:") || data.starts_with("huya_inv_view:")
+        || data.starts_with("huya_inv_detail:")
         || data.starts_with("huya_inv_equip:")
         || data.starts_with("huya_inv_unequip:") || data.starts_with("huya_inv_sell:")
         || data.starts_with("huya_inv_use:")

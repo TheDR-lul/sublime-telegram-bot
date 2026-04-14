@@ -1,7 +1,7 @@
 //! Database operations for the HuyActa tamagotchi game.
 //!
 //! Each chat × user pair has one Huya row.
-//! length_mm < 0 means the user is growing an ass instead of a dick.
+//! length_mm < 0 means the user is in pussy mode instead of dick mode.
 //! Daily action limit = max_actions() (base 4 + Dynamo bonus).
 //!
 //! HP is persistent; replenishes on consume_action (+10 + skill_stamina*3, capped at max_hp()).
@@ -245,9 +245,23 @@ pub async fn fight(
     };
 
     let (winner_tg_id, loser_tg_id, winner_id, loser_id, winner_len, loser_len) = if atk >= def {
-        (challenger_tg_id, target_tg_id, ch.id, tg.id, ch.length_mm + steal_mm, tg.length_mm - steal_mm)
+        (
+            challenger_tg_id,
+            target_tg_id,
+            ch.id,
+            tg.id,
+            ch.length_mm + steal_mm,
+            (tg.length_mm - steal_mm).max(0),
+        )
     } else {
-        (target_tg_id, challenger_tg_id, tg.id, ch.id, tg.length_mm + steal_mm, ch.length_mm - steal_mm)
+        (
+            target_tg_id,
+            challenger_tg_id,
+            tg.id,
+            ch.id,
+            tg.length_mm + steal_mm,
+            (ch.length_mm - steal_mm).max(0),
+        )
     };
 
     sqlx::query("UPDATE huya SET length_mm = $1 WHERE id = $2").bind(winner_len).bind(winner_id).execute(pool).await?;
@@ -312,10 +326,14 @@ pub async fn steal_attempt(
     let scales_penalty = tgt.skill_scales as f64 * 0.025;
     let eternal_bonus = att.skill_eternal as f64 * 0.15;
     let booster_bonus = att.steal_boost as f64 * 0.01;
+    let form_chance_bonus = if att.is_pussy() { 0.06 } else { 0.0 };
+    let form_resist_bonus = if tgt.is_pussy() { 0.06 } else { 0.0 };
     let chance = (base_chance * (0.5 + 0.5 * parity) + cunning_bonus - scales_penalty + eternal_bonus)
         + att_fx.steal_chance_pct
         + booster_bonus
-        - tgt_fx.steal_resist_pct;
+        + form_chance_bonus
+        - tgt_fx.steal_resist_pct
+        - form_resist_bonus;
     let chance = chance.clamp(0.05, 0.85);
     let chance_pct = (chance * 100.0).round() as u8;
 
@@ -349,7 +367,11 @@ pub async fn steal_attempt(
             x if x < 0.90 => rng.random_range(0.10_f64..0.16_f64),
             _ => rng.random_range(0.16_f64..0.22_f64),
         };
-        let steal_mm = ((tgt_len * parity * ratio) as i32).min(steal_cap).max(3);
+        let raw_steal = (tgt_len * parity * ratio).round() as i32;
+        let mut steal_mm = raw_steal.clamp(0, steal_cap.max(0));
+        if steal_mm == 0 && steal_cap > 0 {
+            steal_mm = 1;
+        }
 
         let backlash_mm = if success {
             0
@@ -372,6 +394,7 @@ pub async fn steal_attempt(
                     0.01
                     + tgt.skill_ironballs as f64 * 0.002
                     + tgt.skill_scales as f64 * 0.001
+                    + if tgt.is_pussy() { 0.01 } else { 0.0 }
                 )
                 .clamp(0.01, 0.04);
                 ((att_len * backlash_ratio) as i32).clamp(2, 12)
@@ -386,10 +409,10 @@ pub async fn steal_attempt(
     if success {
         sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE id = $2")
             .bind(steal_mm).bind(att.id).execute(pool).await?;
-        sqlx::query("UPDATE huya SET length_mm = length_mm - $1 WHERE id = $2")
+        sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 0) WHERE id = $2")
             .bind(steal_mm).bind(tgt.id).execute(pool).await?;
     } else if backlash_mm > 0 {
-        sqlx::query("UPDATE huya SET length_mm = length_mm - $1 WHERE id = $2")
+        sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 0) WHERE id = $2")
             .bind(backlash_mm).bind(att.id).execute(pool).await?;
         sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE id = $2")
             .bind(backlash_mm).bind(tgt.id).execute(pool).await?;
@@ -619,13 +642,13 @@ pub async fn claim_daily_chest(
     tg_id: i64,
     chest_id: &str,
 ) -> Result<(bool, Option<i64>), AppError> {
-    let last_claim: Option<DateTime<Utc>> = sqlx::query_scalar(
+    let last_claim: Option<DateTime<Utc>> = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
         "SELECT MAX(claimed_at) FROM huya_daily_chest_claim
          WHERE tg_id = $1 AND chest_id = $2",
     )
     .bind(tg_id)
     .bind(chest_id)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
 
     if let Some(ts) = last_claim {
@@ -1490,7 +1513,6 @@ pub enum PetFriendState {
     Ok,
     NoEnergy,
     TooManyFriends,
-    TargetIsAss,
 }
 
 pub struct PetFriendResult {
@@ -1510,16 +1532,6 @@ pub async fn pet_friend(
 ) -> Result<PetFriendResult, AppError> {
     let (from_huya, _) = get_or_create(pool, chat_id, from_tg_id).await?;
     let (target_huya, _) = get_or_create(pool, chat_id, target_tg_id).await?;
-
-    if target_huya.is_ass() {
-        return Ok(PetFriendResult {
-            from: from_huya,
-            target: target_huya,
-            heal: 0,
-            xp_gain: 0,
-            state: PetFriendState::TargetIsAss,
-        });
-    }
 
     if !can_pet_friend(pool, chat_id, from_tg_id, target_tg_id).await? {
         return Ok(PetFriendResult {
@@ -1542,7 +1554,12 @@ pub async fn pet_friend(
     };
 
     let heal = {
-        let base = 10 + target_huya.skill_stamina * 2;
+        let base = if target_huya.is_pussy() {
+            // Pizdyaka form is less explosive, but responds better to defensive touch.
+            8 + target_huya.skill_skin * 3 + target_huya.skill_scales * 2
+        } else {
+            10 + target_huya.skill_stamina * 2
+        };
         let max_hp = target_huya.max_hp();
         let new_hp = (target_huya.hp + base).min(max_hp);
         let applied = new_hp - target_huya.hp;
@@ -2307,7 +2324,9 @@ pub async fn raid_take_turn(
             if actor_side == "party" && raid.focus_round == raid.round {
                 damage = (damage as f64 * 1.12) as i32;
             }
-            damage = ((damage as f64) * atk_factor * def_factor).round() as i32;
+            let attacker_form_mult = if actor_huya.is_pussy() { 0.90 } else { 1.0 };
+            let defender_form_mult = if target_huya.is_pussy() { 0.85 } else { 1.0 };
+            damage = ((damage as f64) * atk_factor * def_factor * attacker_form_mult * defender_form_mult).round() as i32;
             damage = damage.max(3);
 
             sqlx::query(
@@ -2618,7 +2637,7 @@ pub async fn process_round(
     } else {
         let (winner, loser) = if ch_wins_round { (&ch, &tg) } else { (&tg, &ch) };
         let (winner_hp, _loser_hp) = if ch_wins_round { (fight.ch_hp, fight.tg_hp) } else { (fight.tg_hp, fight.ch_hp) };
-        let damage: i32 = {
+            let damage: i32 = {
             let mut rng = rand::rng();
             let base = winner.length_mm.max(1) as f64 * 0.05
                 + rng.random_range(10.0_f64..25.0_f64);
@@ -2637,7 +2656,9 @@ pub async fn process_round(
                 * berserker_mult * eternal_mult * vortex_crit * eggtwist_crit;
             let def_factor = (1.0 - loser.skill_skin as f64 * 0.03 - loser.def_boost as f64 / 100.0 - lose_fx.def_pct)
                 .max(0.15) * pierce_factor;
-            ((base * atk_factor * def_factor) as i32).max(5)
+            let attacker_form_mult = if winner.is_pussy() { 0.90 } else { 1.0 };
+            let defender_form_mult = if loser.is_pussy() { 0.85 } else { 1.0 };
+            ((base * atk_factor * def_factor * attacker_form_mult * defender_form_mult) as i32).max(5)
         };
         if ch_wins_round {
             (0, damage, Some(fight.challenger_tg_id))
@@ -2650,10 +2671,10 @@ pub async fn process_round(
     let mut new_tg_hp = (fight.tg_hp - tg_damage).max(0);
     // Thorns-style reflect from equipment traits.
     if ch_damage > 0 && tg_fx.reflect_pct > 0.0 {
-        new_tg_hp = (new_tg_hp - (ch_damage as f64 * tg_fx.reflect_pct).round() as i32).max(0);
+        new_ch_hp = (new_ch_hp - (ch_damage as f64 * tg_fx.reflect_pct).round() as i32).max(0);
     }
     if tg_damage > 0 && ch_fx.reflect_pct > 0.0 {
-        new_ch_hp = (new_ch_hp - (tg_damage as f64 * ch_fx.reflect_pct).round() as i32).max(0);
+        new_tg_hp = (new_tg_hp - (tg_damage as f64 * ch_fx.reflect_pct).round() as i32).max(0);
     }
 
     // Spirit: heal on round win
@@ -2732,16 +2753,17 @@ pub async fn finalize_fight_result(
     };
 
     let loser_old_len = loser.length_mm;
-    let loser_new_len = loser.length_mm - steal_mm;
-    let steal_actual = if loser.skill_fortress > 0 && loser_new_len < 10 {
+    let loser_len_after_raw = loser.length_mm - steal_mm;
+    let steal_actual = if loser.skill_fortress > 0 && loser_len_after_raw < 10 {
         (loser.length_mm - 10).max(0)
     } else {
         steal_mm
     };
+    let loser_new_len = (loser.length_mm - steal_actual).max(0);
 
     sqlx::query("UPDATE huya SET length_mm = length_mm + $1, fights_won = fights_won + 1 WHERE id = $2")
         .bind(steal_actual).bind(winner.id).execute(pool).await?;
-    sqlx::query("UPDATE huya SET length_mm = length_mm - $1, fights_lost = fights_lost + 1 WHERE id = $2")
+    sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 0), fights_lost = fights_lost + 1 WHERE id = $2")
         .bind(steal_actual).bind(loser.id).execute(pool).await?;
 
     // Fortress: clamp loser to 10mm min
