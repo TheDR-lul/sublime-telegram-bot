@@ -770,14 +770,65 @@ pub async fn open_chest(
     Ok(Some(row))
 }
 
-/// Equip an inventory item into a slot. Returns true on success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EquipItemResult {
+    Success,
+    NotFound,
+    NotEquipment,
+    WrongSlot,
+    SlotLocked,
+    AlreadyEquipped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnequipItemResult {
+    Success,
+    NotEquipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SellItemResult {
+    Sold { item_id: String, refund_mm: i32 },
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseBoosterResult {
+    Used { effect: String, value: i32 },
+    NotFound,
+    NotBooster,
+    NoCharges,
+    InvalidEffect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketGemResult {
+    Success,
+    ItemNotFound,
+    ItemNotEquipment,
+    NoSockets,
+    GemNotFound,
+    GemNotGem,
+    SocketsFull,
+}
+
+#[derive(Debug, Clone)]
+pub enum ReforgeItemResult {
+    Completed(ReforgeResult),
+    ItemNotFound,
+    ItemNotEquipment,
+    CatalystNotFound,
+    CatalystNotGem,
+}
+
+/// Equip an inventory item into a slot.
 pub async fn equip_item(
     pool: &PgPool,
     chat_id: i64,
     tg_id: i64,
     slot: &str,
     inventory_id: i32,
-) -> Result<bool, AppError> {
+) -> Result<EquipItemResult, AppError> {
     let inv = sqlx::query_as::<_, HuyaInventoryItem>(
         "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
                 roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
@@ -787,18 +838,18 @@ pub async fn equip_item(
     .bind(inventory_id).bind(tg_id)
     .fetch_optional(pool).await?;
     let Some(inv) = inv else {
-        return Ok(false);
+        return Ok(EquipItemResult::NotFound);
     };
     if inv.tg_id != tg_id || inv.item_kind != "equipment" {
-        return Ok(false);
+        return Ok(EquipItemResult::NotEquipment);
     }
     if let Some(ref expected_slot) = inv.slot && expected_slot != slot {
-        return Ok(false);
+        return Ok(EquipItemResult::WrongSlot);
     }
     if slot.starts_with("ring_") || slot.starts_with("piercing_") {
         let (h, _) = get_or_create(pool, chat_id, tg_id).await?;
         if !slot_unlocked_for_length(slot, h.length_mm) {
-            return Ok(false);
+            return Ok(EquipItemResult::SlotLocked);
         }
     }
 
@@ -809,7 +860,7 @@ pub async fn equip_item(
     .bind(tg_id).bind(inventory_id)
     .fetch_optional(pool).await?;
     if already.is_some() {
-        return Ok(false);
+        return Ok(EquipItemResult::AlreadyEquipped);
     }
 
     let mut tx = pool.begin().await?;
@@ -831,7 +882,7 @@ pub async fn equip_item(
     .await?;
 
     tx.commit().await?;
-    Ok(true)
+    Ok(EquipItemResult::Success)
 }
 
 pub async fn sell_inventory_item(
@@ -839,7 +890,7 @@ pub async fn sell_inventory_item(
     chat_id: i64,
     tg_id: i64,
     inventory_id: i32,
-) -> Result<Option<i32>, AppError> {
+) -> Result<SellItemResult, AppError> {
     let mut tx = pool.begin().await?;
     let item = sqlx::query_as::<_, HuyaInventoryItem>(
         "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
@@ -850,7 +901,7 @@ pub async fn sell_inventory_item(
     .bind(inventory_id).bind(tg_id)
     .fetch_optional(&mut *tx).await?;
     let Some(item) = item else {
-        return Ok(None);
+        return Ok(SellItemResult::NotFound);
     };
 
     sqlx::query("DELETE FROM huya_equipment WHERE tg_id = $1 AND inventory_id = $2")
@@ -864,7 +915,10 @@ pub async fn sell_inventory_item(
         .bind(tg_id)
         .execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok(Some(item.sell_price_mm.max(0)))
+    Ok(SellItemResult::Sold {
+        item_id: item.item_id,
+        refund_mm: item.sell_price_mm.max(0),
+    })
 }
 
 pub async fn use_booster_item(
@@ -872,7 +926,7 @@ pub async fn use_booster_item(
     chat_id: i64,
     tg_id: i64,
     inventory_id: i32,
-) -> Result<Option<(String, i32)>, AppError> {
+) -> Result<UseBoosterResult, AppError> {
     let mut tx = pool.begin().await?;
     let item = sqlx::query_as::<_, HuyaInventoryItem>(
         "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
@@ -883,10 +937,13 @@ pub async fn use_booster_item(
     .bind(inventory_id).bind(tg_id)
     .fetch_optional(&mut *tx).await?;
     let Some(item) = item else {
-        return Ok(None);
+        return Ok(UseBoosterResult::NotFound);
     };
-    if item.item_kind != "booster" || item.charges <= 0 {
-        return Ok(None);
+    if item.item_kind != "booster" {
+        return Ok(UseBoosterResult::NotBooster);
+    }
+    if item.charges <= 0 {
+        return Ok(UseBoosterResult::NoCharges);
     }
     let effect = item.booster_effect.clone().unwrap_or_default();
     let value = item.booster_value;
@@ -907,12 +964,12 @@ pub async fn use_booster_item(
             sqlx::query("UPDATE huya SET actions_left = actions_left + $1 WHERE tg_id = $2")
                 .bind(value.max(1)).bind(tg_id).execute(&mut *tx).await?;
         }
-        _ => return Ok(None),
+        _ => return Ok(UseBoosterResult::InvalidEffect),
     }
     sqlx::query("DELETE FROM huya_inventory WHERE id = $1 AND tg_id = $2")
         .bind(inventory_id).bind(tg_id).execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok(Some((effect, value)))
+    Ok(UseBoosterResult::Used { effect, value })
 }
 
 pub async fn socketed_gems_for_item(
@@ -976,7 +1033,7 @@ pub async fn socket_gem_into_item(
     tg_id: i64,
     item_inventory_id: i32,
     gem_inventory_id: i32,
-) -> Result<bool, AppError> {
+) -> Result<SocketGemResult, AppError> {
     let mut tx = pool.begin().await?;
     let item = sqlx::query_as::<_, HuyaInventoryItem>(
         "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
@@ -990,10 +1047,13 @@ pub async fn socket_gem_into_item(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(item) = item else {
-        return Ok(false);
+        return Ok(SocketGemResult::ItemNotFound);
     };
-    if item.item_kind != "equipment" || item.socket_capacity <= 0 {
-        return Ok(false);
+    if item.item_kind != "equipment" {
+        return Ok(SocketGemResult::ItemNotEquipment);
+    }
+    if item.socket_capacity <= 0 {
+        return Ok(SocketGemResult::NoSockets);
     }
     let gem = sqlx::query_as::<_, HuyaInventoryItem>(
         "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
@@ -1007,10 +1067,10 @@ pub async fn socket_gem_into_item(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(gem) = gem else {
-        return Ok(false);
+        return Ok(SocketGemResult::GemNotFound);
     };
     if gem.item_kind != "gem" {
-        return Ok(false);
+        return Ok(SocketGemResult::GemNotGem);
     }
     let used: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM huya_item_socket WHERE item_inventory_id = $1",
@@ -1019,7 +1079,7 @@ pub async fn socket_gem_into_item(
     .fetch_one(&mut *tx)
     .await?;
     if used >= item.socket_capacity as i64 {
-        return Ok(false);
+        return Ok(SocketGemResult::SocketsFull);
     }
     let next_socket = (used as i32) + 1;
 
@@ -1044,16 +1104,17 @@ pub async fn socket_gem_into_item(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(SocketGemResult::Success)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum ReforgeOutcome {
     Success,
     Fail,
     CritFail,
 }
 
+#[derive(Debug, Clone)]
 pub struct ReforgeResult {
     pub outcome: ReforgeOutcome,
     pub old_roll: i32,
@@ -1066,7 +1127,7 @@ pub async fn reforge_item_with_gem(
     tg_id: i64,
     item_inventory_id: i32,
     catalyst_gem_id: i32,
-) -> Result<Option<ReforgeResult>, AppError> {
+) -> Result<ReforgeItemResult, AppError> {
     let mut tx = pool.begin().await?;
     let item = sqlx::query_as::<_, HuyaInventoryItem>(
         "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
@@ -1080,10 +1141,10 @@ pub async fn reforge_item_with_gem(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(item) = item else {
-        return Ok(None);
+        return Ok(ReforgeItemResult::ItemNotFound);
     };
     if item.item_kind != "equipment" {
-        return Ok(None);
+        return Ok(ReforgeItemResult::ItemNotEquipment);
     }
 
     let catalyst = sqlx::query_as::<_, HuyaInventoryItem>(
@@ -1098,10 +1159,10 @@ pub async fn reforge_item_with_gem(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(catalyst) = catalyst else {
-        return Ok(None);
+        return Ok(ReforgeItemResult::CatalystNotFound);
     };
     if catalyst.item_kind != "gem" {
-        return Ok(None);
+        return Ok(ReforgeItemResult::CatalystNotGem);
     }
 
     let (mut succ, mut crit) = match item.rarity.as_str() {
@@ -1193,7 +1254,11 @@ pub async fn reforge_item_with_gem(
     .await?;
 
     tx.commit().await?;
-    Ok(Some(ReforgeResult { outcome, old_roll, new_roll }))
+    Ok(ReforgeItemResult::Completed(ReforgeResult {
+        outcome,
+        old_roll,
+        new_roll,
+    }))
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1282,13 +1347,13 @@ pub async fn equipment_effects_for_player(pool: &PgPool, chat_id: i64, tg_id: i6
     Ok(fx)
 }
 
-/// Unequip a slot. Returns true if something was unequipped.
+/// Unequip a slot.
 pub async fn unequip_item(
     pool: &PgPool,
     chat_id: i64,
     tg_id: i64,
     slot: &str,
-) -> Result<bool, AppError> {
+) -> Result<UnequipItemResult, AppError> {
     let res = sqlx::query(
         "DELETE FROM huya_equipment WHERE tg_id = $1 AND slot = $2",
     )
@@ -1296,7 +1361,11 @@ pub async fn unequip_item(
     .bind(slot)
     .execute(pool)
     .await?;
-    Ok(res.rows_affected() > 0)
+    if res.rows_affected() > 0 {
+        Ok(UnequipItemResult::Success)
+    } else {
+        Ok(UnequipItemResult::NotEquipped)
+    }
 }
 
 /// When loser loses ring slots due to shrink, transfer one highest ring_X slot to winner.
@@ -1459,17 +1528,20 @@ pub async fn can_pet_friend(
 ) -> Result<bool, AppError> {
     let today = Utc::now().date_naive();
     // Already petted this target today – always allowed.
-    let existing: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM huya_pet_daily \
-         WHERE chat_id = $1 AND from_tg_id = $2 AND target_tg_id = $3 AND day = $4",
+    let already_petted: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM huya_pet_daily
+             WHERE chat_id = $1 AND from_tg_id = $2 AND target_tg_id = $3 AND day = $4
+         )",
     )
     .bind(chat_id)
     .bind(from_tg_id)
     .bind(target_tg_id)
     .bind(today)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
-    if existing.is_some() {
+    if already_petted {
         return Ok(true);
     }
     // Count distinct friends already petted today.
@@ -1520,6 +1592,7 @@ pub struct PetFriendResult {
     pub target: Huya,
     pub heal: i32,
     pub xp_gain: i32,
+    pub pussy_depth_reduce_mm: i32,
     pub state: PetFriendState,
 }
 
@@ -1539,6 +1612,7 @@ pub async fn pet_friend(
             target: target_huya,
             heal: 0,
             xp_gain: 0,
+            pussy_depth_reduce_mm: 0,
             state: PetFriendState::TooManyFriends,
         });
     }
@@ -1549,6 +1623,7 @@ pub async fn pet_friend(
             target: target_huya,
             heal: 0,
             xp_gain: 0,
+            pussy_depth_reduce_mm: 0,
             state: PetFriendState::NoEnergy,
         });
     };
@@ -1569,6 +1644,21 @@ pub async fn pet_friend(
             .execute(pool)
             .await?;
         applied
+    };
+    let pussy_depth_reduce_mm = if target_huya.is_pussy() {
+        let reduce_mm = {
+            let mut rng = rand::rng();
+            rng.random_range(4..=12)
+        };
+        let new_len = (target_huya.length_mm + reduce_mm).min(0);
+        sqlx::query("UPDATE huya SET length_mm = $1 WHERE id = $2")
+            .bind(new_len)
+            .bind(target_huya.id)
+            .execute(pool)
+            .await?;
+        (new_len - target_huya.length_mm).max(0)
+    } else {
+        0
     };
 
     let xp_gain: i32 = {
@@ -1596,6 +1686,7 @@ pub async fn pet_friend(
         target: target_updated,
         heal,
         xp_gain,
+        pussy_depth_reduce_mm,
         state: PetFriendState::Ok,
     })
 }
@@ -1885,10 +1976,13 @@ fn next_alive_index(order: &[i64], members: &[HuyaRaidMember], from: usize) -> u
 }
 
 pub async fn get_pending_or_active_raid(pool: &PgPool, chat_id: i64) -> Result<Option<HuyaRaid>, AppError> {
+    cancel_expired_raids_for_chat(pool, chat_id).await?;
     let row = sqlx::query_as::<_, HuyaRaid>(
         &format!(
             "SELECT {RAID_SELECT} FROM huya_raid
-             WHERE chat_id = $1 AND status IN ('pending', 'active')
+             WHERE chat_id = $1
+               AND status IN ('pending', 'active')
+               AND expires_at > NOW()
              ORDER BY created_at DESC LIMIT 1"
         ),
     )
@@ -1896,6 +1990,33 @@ pub async fn get_pending_or_active_raid(pool: &PgPool, chat_id: i64) -> Result<O
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+pub async fn cancel_expired_raids_for_chat(pool: &PgPool, chat_id: i64) -> Result<u64, AppError> {
+    let res = sqlx::query(
+        "UPDATE huya_raid
+         SET status = 'cancelled'
+         WHERE chat_id = $1
+           AND status IN ('pending', 'active')
+           AND expires_at <= NOW()",
+    )
+    .bind(chat_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+pub async fn cancel_expired_raids(pool: &PgPool) -> Result<Vec<(i32, i64, i32)>, AppError> {
+    let rows = sqlx::query_as::<_, (i32, i64, i32)>(
+        "UPDATE huya_raid
+         SET status = 'cancelled'
+         WHERE status IN ('pending', 'active')
+           AND expires_at <= NOW()
+         RETURNING id, chat_id, message_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 pub async fn get_raid(pool: &PgPool, raid_id: i32) -> Result<Option<HuyaRaid>, AppError> {
@@ -1944,6 +2065,7 @@ pub async fn create_raid(
     leader_hp: i32,
     target_hp: i32,
 ) -> Result<HuyaRaid, AppError> {
+    cancel_expired_raids_for_chat(pool, chat_id).await?;
     let raid = sqlx::query_as::<_, HuyaRaid>(
         &format!(
             "INSERT INTO huya_raid (chat_id, leader_tg_id, target_tg_id)

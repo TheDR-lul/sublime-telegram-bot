@@ -120,9 +120,8 @@ async fn resolve_from_reply(reply: &Message) -> Option<ResolvedTarget> {
 ///
 /// Priority:
 /// 1) TextMention / TextLink / @mention in the command message.
-/// 2) TextMention / TextLink / @mention in the replied message.
-/// 3) Command argument: @username → DB lookup; plain text → display name lookup.
-/// 4) Reply author.
+/// 2) Command argument: @username → DB lookup; plain text → display name lookup.
+/// 3) Reply author.
 pub async fn resolve_target(
     pool: &PgPool,
     msg: &Message,
@@ -133,14 +132,7 @@ pub async fn resolve_target(
         return res;
     }
 
-    // 2) Entities in the replied message.
-    if let Some(reply) = msg.reply_to_message() {
-        if let Some(res) = resolve_from_entities(pool, &reply).await {
-            return res;
-        }
-    }
-
-    // 3) Command argument: try @username then display name.
+    // 2) Command argument: try @username then display name.
     let trimmed = arg.trim();
     if !trimmed.is_empty() {
         if trimmed.starts_with('@') {
@@ -155,7 +147,7 @@ pub async fn resolve_target(
         }
     }
 
-    // 4) Fallback: reply author.
+    // 3) Fallback: reply author.
     if let Some(reply) = msg.reply_to_message() {
         if let Some(res) = resolve_from_reply(reply).await {
             return res;

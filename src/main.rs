@@ -114,6 +114,29 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
             }
         });
     }
+    // Auto-cancel expired huya raids.
+    {
+        let bot_clone = bot.clone();
+        let pool_clone = pool.clone();
+        let raid_shutdown = shutdown_token.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(45));
+            loop {
+                tokio::select! {
+                    _ = raid_shutdown.cancelled() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        if let Err(e) =
+                            sublime::handlers::huya::cancel_expired_raids(&bot_clone, &pool_clone).await
+                        {
+                            tracing::debug!("cancel_expired_raids: {:?}", e);
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     let locale = std::sync::Arc::new(sublime::i18n::Locale::new());
 
@@ -124,7 +147,7 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
             let pool = error_pool.clone();
             async move {
                 tracing::error!("Handler error (command or callback failed): {:?}", err);
-                let text = format!("handler error: {:?}", err);
+                let text = sublime::alerts::inject_last_context(&format!("handler error: {:?}", err));
                 let _ = alerts::notify(&pool, &text).await;
             }
         }))
@@ -358,7 +381,11 @@ fn check_container_running(container: &str) -> bool {
 /// Run minimal notification bot: /status (is main bot up), /stats (chats + users if DATABASE_URL set).
 /// Requires NOTIFICATION_BOT_TOKEN; optional WATCHDOG_CONTAINER, DATABASE_URL for /stats.
 async fn run_watchdog_bot() -> Result<(), AppError> {
-    use teloxide::types::Message;
+    use sublime::db::huya as huya_db;
+    use teloxide::payloads::{
+        AnswerCallbackQuerySetters, EditMessageReplyMarkupSetters, SendMessageSetters,
+    };
+    use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode};
 
     let token = std::env::var("NOTIFICATION_BOT_TOKEN")
         .map_err(|_| AppError::Config("NOTIFICATION_BOT_TOKEN required for watchdog".into()))?;
@@ -574,11 +601,89 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
         Ok(())
     }
 
+    async fn reward_error_handler(
+        bot: teloxide::Bot,
+        query: CallbackQuery,
+        pool: Option<sqlx::PgPool>,
+    ) -> Result<(), AppError> {
+        let pool = if let Some(p) = pool {
+            p
+        } else {
+            let _ = bot
+                .answer_callback_query(query.id)
+                .text("DATABASE_URL is not configured.")
+                .await;
+            return Ok(());
+        };
+
+        let Some(data) = query.data.as_deref() else {
+            let _ = bot.answer_callback_query(query.id).await;
+            return Ok(());
+        };
+        let parts: Vec<&str> = data.split(':').collect();
+        if parts.len() != 3 || parts[0] != "reward_err" {
+            let _ = bot.answer_callback_query(query.id).await;
+            return Ok(());
+        }
+        let chat_id = match parts[1].parse::<i64>() {
+            Ok(v) => v,
+            Err(_) => {
+                let _ = bot
+                    .answer_callback_query(query.id)
+                    .text("Invalid reward payload.")
+                    .await;
+                return Ok(());
+            }
+        };
+        let target_tg_id = match parts[2].parse::<i64>() {
+            Ok(v) => v,
+            Err(_) => {
+                let _ = bot
+                    .answer_callback_query(query.id)
+                    .text("Invalid reward payload.")
+                    .await;
+                return Ok(());
+            }
+        };
+
+        let awarded = huya_db::open_chest(&pool, chat_id, target_tg_id, "daily_free_crate", true)
+            .await?;
+        let Some(item) = awarded else {
+            let _ = bot
+                .answer_callback_query(query.id)
+                .text("Could not grant reward chest.")
+                .await;
+            return Ok(());
+        };
+
+        let text = format!(
+            "<a href=\"tg://user?id={target_tg_id}\">This player</a>, the gnome dick-thieves found a dick bug and decided to reward the trigger with a chest. Reward: <b>{}</b> ({})",
+            item.item_id,
+            item.rarity
+        );
+        bot.send_message(teloxide::types::ChatId(chat_id), text)
+            .parse_mode(ParseMode::Html)
+            .await?;
+
+        if let Some(msg) = query.message.as_ref() {
+            let _ = bot
+                .edit_message_reply_markup(msg.chat().id, msg.id())
+                .reply_markup(InlineKeyboardMarkup::new(Vec::<Vec<InlineKeyboardButton>>::new()))
+                .await;
+        }
+        let _ = bot
+            .answer_callback_query(query.id)
+            .text("Reward granted.")
+            .await;
+        Ok(())
+    }
+
     use teloxide::dispatching::UpdateFilterExt;
     use teloxide::types::Update;
     let container_clone = container.clone();
-    let pool_clone = pool.clone();
-    let schema = Update::filter_message()
+    let pool_for_messages = pool.clone();
+    let pool_for_callbacks = pool.clone();
+    let message_schema = Update::filter_message()
         .filter(|msg: Message| {
             msg.text()
                 .map(|t| {
@@ -597,7 +702,7 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
         .endpoint(move |bot: teloxide::Bot, msg: Message| {
             let text = msg.text().map(|s| s.to_string()).unwrap_or_default();
             let container = container_clone.clone();
-            let pool = pool_clone.clone();
+            let pool = pool_for_messages.clone();
             async move {
                 let trimmed = text.trim();
                 if trimmed.starts_with("/status") || trimmed.eq_ignore_ascii_case("status") {
@@ -611,6 +716,15 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
                 }
             }
         });
+    let callback_schema = Update::filter_callback_query().endpoint(
+        move |bot: teloxide::Bot, query: CallbackQuery| {
+            let pool = pool_for_callbacks.clone();
+            async move { reward_error_handler(bot, query, pool).await }
+        },
+    );
+    let schema = teloxide::dptree::entry()
+        .branch(message_schema)
+        .branch(callback_schema);
 
     let mut disp = teloxide::dispatching::Dispatcher::builder(bot, schema).build();
     tracing::info!("Watchdog bot started (/status, /stats)");

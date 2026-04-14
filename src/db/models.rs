@@ -240,12 +240,19 @@ impl Huya {
     /// Maximum HP scales with build size and defensive skills.
     /// This reduces one-shot risk in both normal fights and raids.
     pub fn max_hp(&self) -> i32 {
-        let length_hp = self.length_mm.abs() / 5;
-        let mut base = 100 + length_hp + self.skill_balls * 15;
         if self.is_pussy() {
-            // Pizdyaka build is more survivable in prolonged exchanges.
-            base += 20 + self.skill_skin * 2 + self.skill_scales * 2;
+            // Pussy mode should not lose survivability while reducing depth.
+            // HP here scales mostly from level/defensive build instead of raw depth.
+            let base = 130
+                + self.level.max(1) * 4
+                + self.skill_balls * 15
+                + self.skill_skin * 4
+                + self.skill_scales * 4;
+            let eternal_mult = 1.0 + self.skill_eternal as f64 * 0.15;
+            return (base as f64 * eternal_mult) as i32;
         }
+        let length_hp = self.length_mm.abs() / 5;
+        let base = 100 + length_hp + self.skill_balls * 15;
         let eternal_mult = 1.0 + self.skill_eternal as f64 * 0.15;
         (base as f64 * eternal_mult) as i32
     }

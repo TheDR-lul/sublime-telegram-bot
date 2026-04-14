@@ -58,6 +58,8 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
     }
 
     let chat_id = msg.chat.id.0;
+    let from_tg_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    crate::alerts::set_last_reward_context(chat_id, from_tg_id);
 
     // If chat has no topic-routing configuration, allow commands everywhere.
     // This keeps regular supergroups (without forum topics) fully functional.
@@ -73,7 +75,7 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
             if is_command_text(msg) {
                 let _ = alerts::notify(
                     pool,
-                    &format!("drop:is_topic_allowed count_enabled_topics failed chat_id={chat_id} err={err:?}"),
+                    &format!("drop:is_topic_allowed count_enabled_topics failed chat_id={chat_id} from_tg_id={from_tg_id} err={err:?}"),
                 )
                 .await;
             }
@@ -96,7 +98,7 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
             if is_command_text(msg) {
                 let _ = alerts::notify(
                     pool,
-                    &format!("drop:is_topic_allowed no thread_id chat_id={chat_id} text={:?}", msg.text()),
+                    &format!("drop:is_topic_allowed no thread_id chat_id={chat_id} from_tg_id={from_tg_id} text={:?}", msg.text()),
                 )
                 .await;
             }
@@ -116,7 +118,7 @@ async fn is_topic_allowed(pool: &PgPool, bot: &Bot, msg: &teloxide::types::Messa
             if is_command_text(msg) {
                 let _ = alerts::notify(
                     pool,
-                    &format!("drop:is_topic_allowed is_topic_enabled failed chat_id={chat_id} topic_id={thread_id} err={err:?}"),
+                    &format!("drop:is_topic_allowed is_topic_enabled failed chat_id={chat_id} from_tg_id={from_tg_id} topic_id={thread_id} err={err:?}"),
                 )
                 .await;
             }
@@ -131,6 +133,9 @@ async fn callback_router(
     pool: PgPool,
     config: Config,
 ) -> Result<(), AppError> {
+    if let Some(msg) = query.message.as_ref() {
+        crate::alerts::set_last_reward_context(msg.chat().id.0, query.from.id.0 as i64);
+    }
     let data = query.data.as_deref().unwrap_or("");
     // RPG: development for future — disabled; reply instead of opening menu
     if data.starts_with("rpg:") {
@@ -214,8 +219,7 @@ async fn callback_router(
     {
         return huya_handler::huya_chest_callback(bot, query, pool).await;
     }
-    if data.starts_with("huya_inv_s:") || data.starts_with("huya_inv_page:") || data.starts_with("huya_inv_view:")
-        || data.starts_with("huya_inv_detail:")
+    if data.starts_with("huya_inv_s:")
         || data.starts_with("huya_inv_equip:")
         || data.starts_with("huya_inv_unequip:") || data.starts_with("huya_inv_sell:")
         || data.starts_with("huya_inv_use:")
@@ -471,6 +475,8 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     let schema = message_schema();
     let raw_message_schema = Update::filter_message().endpoint(
         |bot: Bot, msg: Message, pool: PgPool| async move {
+            let from_tg_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+            crate::alerts::set_last_reward_context(msg.chat.id.0, from_tg_id);
             let Some(text) = msg.text() else {
                 return Ok(());
             };
@@ -482,8 +488,9 @@ pub fn build_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                 let _ = alerts::notify(
                     &pool,
                     &format!(
-                        "drop:unparsed command chat_id={} supergroup={} text={:?}",
+                        "drop:unparsed command chat_id={} from_tg_id={} supergroup={} text={:?}",
                         msg.chat.id.0,
+                        msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0),
                         msg.chat.is_supergroup(),
                         t
                     ),
