@@ -35,6 +35,7 @@ services:
       - path: .env.watchdog
         required: false
     environment:
+      TELOXIDE_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DATABASE_URL: postgres://postgres:postgres@db:5432/sublime_bot
       WATCHDOG_CONTAINER: sublime-bot
     volumes:

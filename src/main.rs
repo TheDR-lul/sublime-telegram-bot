@@ -661,9 +661,29 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
             item.item_id,
             item.rarity
         );
-        bot.send_message(teloxide::types::ChatId(chat_id), text)
+        let announcer_bot = std::env::var("TELEGRAM_BOT_TOKEN")
+            .or_else(|_| std::env::var("TELOXIDE_TOKEN"))
+            .ok()
+            .map(teloxide::Bot::new)
+            .unwrap_or_else(|| bot.clone());
+
+        if let Err(err) = announcer_bot
+            .send_message(teloxide::types::ChatId(chat_id), text)
             .parse_mode(ParseMode::Html)
-            .await?;
+            .await
+        {
+            tracing::error!(
+                "reward_error_handler failed to post reward message chat_id={} tg_id={} err={:?}",
+                chat_id,
+                target_tg_id,
+                err
+            );
+            let _ = bot
+                .answer_callback_query(query.id)
+                .text("Reward granted to inventory, but message send failed in target chat.")
+                .await;
+            return Ok(());
+        }
 
         if let Some(msg) = query.message.as_ref() {
             let _ = bot
