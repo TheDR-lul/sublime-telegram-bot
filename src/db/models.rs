@@ -362,6 +362,28 @@ pub struct HuyaEquipmentSlot {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaDutchHelmEvent {
+    pub id: i32,
+    pub event_date: NaiveDate,
+    pub start_at: DateTime<Utc>,
+    pub join_deadline_at: DateTime<Utc>,
+    pub status: String,
+    pub seed: i32,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaDutchHelmParticipant {
+    pub event_id: i32,
+    pub chat_id: i64,
+    pub tg_id: i64,
+    pub joined_at: DateTime<Utc>,
+    pub reward_mm: i32,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PidorBet {
     pub id: i32,
     pub chat_id: i64,

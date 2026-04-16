@@ -137,6 +137,15 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
             }
         });
     }
+    // Daily global Dutch Helm event scheduler.
+    {
+        let bot_clone = bot.clone();
+        let pool_clone = pool.clone();
+        let event_shutdown = shutdown_token.clone();
+        tokio::spawn(async move {
+            sublime::handlers::huya::run_dutch_helm_scheduler(bot_clone, pool_clone, event_shutdown).await;
+        });
+    }
 
     let locale = std::sync::Arc::new(sublime::i18n::Locale::new());
 
@@ -656,10 +665,22 @@ async fn run_watchdog_bot() -> Result<(), AppError> {
             return Ok(());
         };
 
-        let text = format!(
-            "<a href=\"tg://user?id={target_tg_id}\">This player</a>, the gnome dick-thieves found a dick bug and decided to reward the trigger with a chest. Reward: <b>{}</b> ({})",
-            item.item_id,
-            item.rarity
+        let lang = sublime::db::game::get_or_create_game(&pool, chat_id)
+            .await
+            .map(|g| g.lang)
+            .unwrap_or_else(|_| "ru".to_string());
+        let player_link = format!(
+            "<a href=\"tg://user?id={target_tg_id}\">{}</a>",
+            sublime::i18n::LOCALE.t(&lang, "huya.reward_bug_player")
+        );
+        let text = sublime::i18n::LOCALE.t_fmt(
+            &lang,
+            "huya.reward_bug_message",
+            &[
+                ("player", &player_link),
+                ("item", &item.item_id),
+                ("rarity", &item.rarity),
+            ],
         );
         let announcer_bot = std::env::var("TELEGRAM_BOT_TOKEN")
             .or_else(|_| std::env::var("TELOXIDE_TOKEN"))

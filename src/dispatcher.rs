@@ -219,6 +219,9 @@ async fn callback_router(
     {
         return huya_handler::huya_chest_callback(bot, query, pool).await;
     }
+    if data.starts_with("huya_dh_join:") {
+        return huya_handler::huya_dutch_helm_join_callback(bot, query, pool).await;
+    }
     if data.starts_with("huya_inv_s:")
         || data.starts_with("huya_inv_equip:")
         || data.starts_with("huya_inv_unequip:") || data.starts_with("huya_inv_sell:")

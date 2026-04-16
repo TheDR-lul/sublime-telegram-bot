@@ -8,12 +8,14 @@
 //! Skills: 20-tier tree (T1-5) levelled via upgrade_skill() using skill_points earned on level-up.
 //! Shop boosts: atk_boost / def_boost / grow_boost — temporary, reset after use.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rand::RngExt;
 use sqlx::PgPool;
 
 use crate::db::kv;
-use crate::db::models::{Huya, HuyaEquipmentSlot, HuyaInventoryItem, HuyaSocketedGem};
+use crate::db::models::{
+    Huya, HuyaDutchHelmEvent, HuyaEquipmentSlot, HuyaInventoryItem, HuyaSocketedGem,
+};
 use crate::error::AppError;
 
 const HUYA_SELECT: &str =
@@ -786,6 +788,10 @@ pub enum UnequipItemResult {
     NotEquipped,
 }
 
+pub struct AutoEquipResult {
+    pub changed_slots: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SellItemResult {
     Sold { item_id: String, refund_mm: i32 },
@@ -883,6 +889,87 @@ pub async fn equip_item(
 
     tx.commit().await?;
     Ok(EquipItemResult::Success)
+}
+
+fn rarity_rank(rarity: &str) -> i32 {
+    match rarity {
+        "trash" => 0,
+        "common" => 1,
+        "rare" => 2,
+        "epic" => 3,
+        "legendary" => 4,
+        _ => 1,
+    }
+}
+
+fn item_power_score(item: &HuyaInventoryItem) -> i32 {
+    rarity_rank(&item.rarity) * 1_000
+        + item.roll.max(0) * 10
+        + item.reforge_level.max(0) * 25
+        + item.socket_capacity.max(0) * 8
+}
+
+pub async fn auto_equip_best(
+    pool: &PgPool,
+    chat_id: i64,
+    tg_id: i64,
+) -> Result<AutoEquipResult, AppError> {
+    let (h, _) = get_or_create(pool, chat_id, tg_id).await?;
+    let items = get_inventory(pool, chat_id, tg_id).await?;
+    let equipped = get_equipment(pool, chat_id, tg_id).await?;
+
+    let mut best_by_slot: std::collections::HashMap<String, HuyaInventoryItem> =
+        std::collections::HashMap::new();
+    for it in items.into_iter().filter(|i| i.item_kind == "equipment") {
+        let Some(slot) = it.slot.clone() else {
+            continue;
+        };
+        if !slot_unlocked_for_length(&slot, h.length_mm) {
+            continue;
+        }
+        let replace = match best_by_slot.get(&slot) {
+            None => true,
+            Some(current) => item_power_score(&it) > item_power_score(current),
+        };
+        if replace {
+            best_by_slot.insert(slot, it);
+        }
+    }
+
+    let current_by_slot: std::collections::HashMap<String, i32> = equipped
+        .into_iter()
+        .map(|e| (e.slot, e.inventory_id))
+        .collect();
+
+    let mut tx = pool.begin().await?;
+    let mut changed_slots = 0usize;
+    for (slot, best_item) in best_by_slot {
+        let already_equipped = current_by_slot
+            .get(&slot)
+            .map(|id| *id == best_item.id)
+            .unwrap_or(false);
+        if already_equipped {
+            continue;
+        }
+        sqlx::query("DELETE FROM huya_equipment WHERE tg_id = $1 AND slot = $2")
+            .bind(tg_id)
+            .bind(&slot)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO huya_equipment (chat_id, tg_id, slot, inventory_id) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(chat_id)
+        .bind(tg_id)
+        .bind(&slot)
+        .bind(best_item.id)
+        .execute(&mut *tx)
+        .await?;
+        changed_slots += 1;
+    }
+    tx.commit().await?;
+
+    Ok(AutoEquipResult { changed_slots })
 }
 
 pub async fn sell_inventory_item(
@@ -1591,6 +1678,7 @@ pub struct PetFriendResult {
     pub from: Huya,
     pub target: Huya,
     pub heal: i32,
+    pub growth_mm: i32,
     pub xp_gain: i32,
     pub pussy_depth_reduce_mm: i32,
     pub state: PetFriendState,
@@ -1611,6 +1699,7 @@ pub async fn pet_friend(
             from: from_huya,
             target: target_huya,
             heal: 0,
+            growth_mm: 0,
             xp_gain: 0,
             pussy_depth_reduce_mm: 0,
             state: PetFriendState::TooManyFriends,
@@ -1622,6 +1711,7 @@ pub async fn pet_friend(
             from: from_huya,
             target: target_huya,
             heal: 0,
+            growth_mm: 0,
             xp_gain: 0,
             pussy_depth_reduce_mm: 0,
             state: PetFriendState::NoEnergy,
@@ -1644,6 +1734,20 @@ pub async fn pet_friend(
             .execute(pool)
             .await?;
         applied
+    };
+    let growth_mm = if !target_huya.is_pussy() {
+        let grow = {
+            let mut rng = rand::rng();
+            rng.random_range(2..=6)
+        };
+        sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE id = $2")
+            .bind(grow)
+            .bind(target_huya.id)
+            .execute(pool)
+            .await?;
+        grow
+    } else {
+        0
     };
     let pussy_depth_reduce_mm = if target_huya.is_pussy() {
         let reduce_mm = {
@@ -1685,6 +1789,7 @@ pub async fn pet_friend(
         from: updated_from_with_xp,
         target: target_updated,
         heal,
+        growth_mm,
         xp_gain,
         pussy_depth_reduce_mm,
         state: PetFriendState::Ok,
@@ -2920,4 +3025,233 @@ pub async fn finalize_fight_result(
         .bind(fight.tg_hp.max(1)).bind(tg.id).execute(pool).await?;
 
     Ok((steal_actual, elo_gain))
+}
+
+const DUTCH_HELM_EVENT_SELECT: &str =
+    "id, event_date, start_at, join_deadline_at, status, seed, created_at, started_at, finished_at";
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DutchHelmChatSummary {
+    pub chat_id: i64,
+    pub participants: i64,
+    pub reward_mm: i32,
+}
+
+pub async fn get_or_create_dutch_helm_event(
+    pool: &PgPool,
+    event_date: NaiveDate,
+    start_at: DateTime<Utc>,
+    join_deadline_at: DateTime<Utc>,
+    seed: i32,
+) -> Result<HuyaDutchHelmEvent, AppError> {
+    let row = sqlx::query_as::<_, HuyaDutchHelmEvent>(&format!(
+        "INSERT INTO huya_dutch_helm_event (event_date, start_at, join_deadline_at, status, seed)
+         VALUES ($1, $2, $3, 'scheduled', $4)
+         ON CONFLICT (event_date) DO UPDATE SET event_date = EXCLUDED.event_date
+         RETURNING {DUTCH_HELM_EVENT_SELECT}"
+    ))
+    .bind(event_date)
+    .bind(start_at)
+    .bind(join_deadline_at)
+    .bind(seed)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn get_dutch_helm_event_by_date(
+    pool: &PgPool,
+    event_date: NaiveDate,
+) -> Result<Option<HuyaDutchHelmEvent>, AppError> {
+    let row = sqlx::query_as::<_, HuyaDutchHelmEvent>(&format!(
+        "SELECT {DUTCH_HELM_EVENT_SELECT}
+         FROM huya_dutch_helm_event
+         WHERE event_date = $1"
+    ))
+    .bind(event_date)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn activate_dutch_helm_event(
+    pool: &PgPool,
+    event_id: i32,
+) -> Result<Option<HuyaDutchHelmEvent>, AppError> {
+    let row = sqlx::query_as::<_, HuyaDutchHelmEvent>(&format!(
+        "UPDATE huya_dutch_helm_event
+         SET status = 'active', started_at = NOW()
+         WHERE id = $1 AND status = 'scheduled'
+         RETURNING {DUTCH_HELM_EVENT_SELECT}"
+    ))
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn get_active_dutch_helm_event(
+    pool: &PgPool,
+    now: DateTime<Utc>,
+) -> Result<Option<HuyaDutchHelmEvent>, AppError> {
+    let row = sqlx::query_as::<_, HuyaDutchHelmEvent>(&format!(
+        "SELECT {DUTCH_HELM_EVENT_SELECT}
+         FROM huya_dutch_helm_event
+         WHERE status = 'active' AND start_at <= $1 AND join_deadline_at > $1
+         ORDER BY id DESC LIMIT 1"
+    ))
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn join_dutch_helm_event(
+    pool: &PgPool,
+    event_id: i32,
+    chat_id: i64,
+    tg_id: i64,
+    now: DateTime<Utc>,
+) -> Result<bool, AppError> {
+    let inserted = sqlx::query(
+        "INSERT INTO huya_dutch_helm_participant (event_id, chat_id, tg_id)
+         SELECT $1, $2, $3
+         WHERE EXISTS (
+             SELECT 1
+             FROM huya_dutch_helm_event e
+             WHERE e.id = $1 AND e.status = 'active' AND e.start_at <= $4 AND e.join_deadline_at > $4
+         )
+         ON CONFLICT (event_id, chat_id, tg_id) DO NOTHING",
+    )
+    .bind(event_id)
+    .bind(chat_id)
+    .bind(tg_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(inserted.rows_affected() > 0)
+}
+
+pub async fn get_dutch_helm_chat_participants_count(
+    pool: &PgPool,
+    event_id: i32,
+    chat_id: i64,
+) -> Result<i64, AppError> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)::bigint FROM huya_dutch_helm_participant WHERE event_id = $1 AND chat_id = $2",
+    )
+    .bind(event_id)
+    .bind(chat_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+pub async fn list_dutch_helm_chat_counts(
+    pool: &PgPool,
+    event_id: i32,
+) -> Result<Vec<(i64, i64)>, AppError> {
+    let rows = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT chat_id, COUNT(*)::bigint AS cnt
+         FROM huya_dutch_helm_participant
+         WHERE event_id = $1
+         GROUP BY chat_id",
+    )
+    .bind(event_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn finalize_dutch_helm_event(
+    pool: &PgPool,
+    event_id: i32,
+) -> Result<Vec<DutchHelmChatSummary>, AppError> {
+    let mut tx = pool.begin().await?;
+    let can_finalize: Option<(i32,)> = sqlx::query_as(
+        "SELECT id FROM huya_dutch_helm_event
+         WHERE id = $1 AND status = 'active' AND join_deadline_at <= NOW()
+         FOR UPDATE",
+    )
+    .bind(event_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if can_finalize.is_none() {
+        tx.rollback().await?;
+        return Ok(Vec::new());
+    }
+
+    let chat_rows = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT chat_id, COUNT(*)::bigint AS cnt
+         FROM huya_dutch_helm_participant
+         WHERE event_id = $1
+         GROUP BY chat_id",
+    )
+    .bind(event_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut out = Vec::with_capacity(chat_rows.len());
+    for (chat_id, participants) in chat_rows {
+        let crowd_bonus = (participants as i32).saturating_sub(1) * 2;
+        let reward_mm = (6 + crowd_bonus).clamp(6, 80);
+        sqlx::query(
+            "UPDATE huya
+             SET length_mm = CASE WHEN length_mm < 0 THEN length_mm - $1 ELSE length_mm + $1 END
+             WHERE chat_id = $2
+               AND tg_id IN (
+                   SELECT tg_id
+                   FROM huya_dutch_helm_participant
+                   WHERE event_id = $3 AND chat_id = $2
+               )",
+        )
+        .bind(reward_mm)
+        .bind(chat_id)
+        .bind(event_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE huya_dutch_helm_participant
+             SET reward_mm = $1
+             WHERE event_id = $2 AND chat_id = $3",
+        )
+        .bind(reward_mm)
+        .bind(event_id)
+        .bind(chat_id)
+        .execute(&mut *tx)
+        .await?;
+
+        out.push(DutchHelmChatSummary {
+            chat_id,
+            participants,
+            reward_mm,
+        });
+    }
+
+    sqlx::query(
+        "UPDATE huya_dutch_helm_event
+         SET status = 'finished', finished_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(out)
+}
+
+pub async fn cleanup_old_dutch_helm_events(
+    pool: &PgPool,
+    keep_days: i64,
+) -> Result<u64, AppError> {
+    let deleted = sqlx::query(
+        "DELETE FROM huya_dutch_helm_event
+         WHERE event_date < (CURRENT_DATE - ($1::int * INTERVAL '1 day'))",
+    )
+    .bind(keep_days as i32)
+    .execute(pool)
+    .await?;
+    Ok(deleted.rows_affected())
 }

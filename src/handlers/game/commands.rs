@@ -458,10 +458,10 @@ async fn run_pidor_game(
             Some(thread) => Some(thread),
             None => {
                 tracing::info!(
-                    "Skip autorun for chat {}: main topic is not configured/enabled",
+                    "Autorun fallback to main chat for {}: main topic is not configured/enabled",
                     chat_id_raw
                 );
-                return Ok(());
+                None
             }
         }
     };
@@ -730,10 +730,26 @@ pub async fn run_pidor_autorun_scheduler(bot: Bot, pool: PgPool, shutdown: Cance
                 .expect("minutes_range is non-empty");
                 (fire_m / 60, fire_m % 60)
             });
+            if now_minutes == start_m {
+                tracing::info!(
+                    "Pidor autorun schedule: day={} slot={} fire_at={:02}:{:02} Kyiv",
+                    day,
+                    slot_str(slot),
+                    fire_at.0,
+                    fire_at.1
+                );
+            }
 
             let fire_minutes = fire_at.0 * 60 + fire_at.1;
             if now_minutes >= fire_minutes {
                 fired.insert(key);
+                tracing::info!(
+                    "Pidor autorun fire: day={} slot={} at={:02}:{:02} Kyiv",
+                    day,
+                    slot_str(slot),
+                    hour,
+                    minute
+                );
                 if let Err(err) = run_pidor_autorun_for_all_games(&bot, &pool, slot).await {
                     tracing::error!("Pidor autorun scheduler error: {:?}", err);
                 }
@@ -756,6 +772,7 @@ async fn run_pidor_autorun_for_all_games(bot: &Bot, pool: &PgPool, slot: PidorAu
         PidorAutorunSlot::Evening => "autorun_evening",
     };
     let games = game::list_games_for_autorun_slot(pool, slot_column).await?;
+    tracing::info!("Pidor autorun batch: slot={} chats={}", slot_str(slot), games.len());
     for g in games {
         let chat_id = ChatId(g.chat_id);
         if let Err(err) = run_pidor_game(bot, pool, chat_id, PidorRunKind::Autorun(slot)).await {

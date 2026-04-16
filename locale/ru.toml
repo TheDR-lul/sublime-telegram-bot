@@ -733,21 +733,26 @@ pet_friend_stage3_pussy = [
 ]
 
 # Результат поглаживания друга
-# {stage1} {stage2} {stage3} {heal} {xp} {depth_line} {target_hp} {target_max_hp} {energy_left}
+# {stage1} {stage2} {stage3} {heal} {xp} {growth_line} {depth_line} {target_hp} {target_max_hp} {energy_left}
 pet_friend_result = """{stage3}
 
 💚 Хуяка подлечена на {heal} HP (сейчас: {target_hp}/{target_max_hp}).
 ✨ Ты получил {xp} XP.
+{growth_line}
 {depth_line}
 🖐 Энергия поглаживаний: {energy_left}/3."""
 
-# {stage1} {stage2} {stage3} {heal} {xp} {depth_line} {target_hp} {target_max_hp} {energy_left}
+# {stage1} {stage2} {stage3} {heal} {xp} {growth_line} {depth_line} {target_hp} {target_max_hp} {energy_left}
 pet_friend_result_pussy = """{stage3}
 
 🌸 Пиздяка восстановлена на {heal} HP (сейчас: {target_hp}/{target_max_hp}).
 ✨ Ты получил {xp} XP.
+{growth_line}
 {depth_line}
 🖐 Энергия поглаживаний: {energy_left}/3."""
+
+# {grow_cm}
+pet_friend_growth = "📈 Хуяка подросла на {grow_cm} см."
 
 # {depth_cm}
 pet_friend_depth_reduce = "🌸 Глубина уменьшилась на {depth_cm} см."
@@ -758,6 +763,25 @@ pet_self = "🫠 <b>{name}</b> пытается погладить себя че
 pet_bot = "🤖 У бота нет хуяки для поглаживания. Потрогай кого-то живого."
 pet_ass = "🌸 {target} сейчас в режиме пиздяки."
 pet_no_target = "Укажи цель для /huyapet: ответом на сообщение или через /huyapet @user."
+reward_bug_player = "виновник бага"
+reward_bug_message = "{player}, гномы-хуекрады нашли хуебаг и решили наградить того, кто его вызвал. Награда: <b>{item}</b> ({rarity})."
+dutch_helm_btn_join = "⚓ Вписаться в штурвал"
+# {minutes}
+dutch_helm_stage_start = [
+  "🏴‍☠️ <b>Голландский штурвал открыт.</b> У вас {minutes} минуты, чтобы влететь в командный замес.",
+  "🌀 Начался <b>Голландский штурвал</b>. Кто успеет нажать за {minutes} минуты — тот в деле.",
+  "⚓ Гейско-пиратский сбор объявлен: <b>Голландский штурвал</b> идёт {minutes} минуты. Жми кнопку и лезь в экипаж."
+]
+# {count}
+dutch_helm_stage_mid = [
+  "🍻 В трюме уже {count} матросов. Можно и плотнее закручивать штурвал.",
+  "🪢 Уже {count} тел в деле. Кто тормозит — тот без бонусной прокачки.",
+  "🏴‍☠️ На борту сейчас {count} участников. Чем плотнее толпа, тем жирнее награда."
+]
+# {count} {reward_cm}
+dutch_helm_final = "✅ Штурвал закрыт. В чате участников: <b>{count}</b>.\n📈 Каждому выдано <b>{reward_cm} см</b> к форме."
+dutch_helm_join_ok = "Вписан в штурвал. Участников в чате: {count}."
+dutch_helm_join_fail = "Не получилось вписаться: окно закрыто или ты уже в списке."
 
 # ── Бой (многораундовая мини-игра) ──────────────────────────────────────────
 # {challenger} {target} — challenger вызывает target на бой
@@ -1100,6 +1124,7 @@ btn_use = "⚡ Использовать"
 btn_sell = "💰 Продать"
 btn_socket = "💎 Инкруст"
 btn_reforge = "🔥 Перековка"
+btn_autoequip = "⚙️ Автоэкип"
 btn_details = "🔍 #{id}"
 btn_socket_pick = "💎 {rarity} {name} +{roll}"
 btn_reforge_pick = "🧪 {rarity} {name} +{roll}"
@@ -1130,6 +1155,8 @@ equip_btn = "Надеть"
 unequip_btn = "Снять"
 sell_btn = "Продать (-30%)"
 equip_success = "✅ Предмет экипирован."
+autoequip_success = "✅ Автоэкип завершен. Обновлено слотов: {count}."
+autoequip_no_changes = "✅ Автоэкип: уже стоит лучший доступный набор."
 unequip_success = "✅ Слот освобождён."
 unequip_fail_not_equipped = "❌ В этом слоте уже пусто."
 sell_success = "💸 Продано: {item}. Получено: {refund} см."

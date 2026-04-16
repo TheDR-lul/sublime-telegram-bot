@@ -3,13 +3,17 @@
 //!           /huyatop, /huyareg, /huyaskills, /huyashop
 
 use sqlx::{self, PgPool};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Timelike, Utc};
+use chrono_tz::Europe::Kyiv;
 use rand::RngExt;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId};
 use std::io::Write;
 use teloxide::utils::html::escape as escape_html;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
+use crate::db::game;
 use crate::db::huya as huya_db;
 use crate::db::models::Huya;
 use crate::db::user;
@@ -1682,6 +1686,15 @@ async fn handle_pet_friend(
             } else {
                 String::new()
             };
+            let growth_line = if result.growth_mm > 0 {
+                LOCALE.t_fmt(
+                    "ru",
+                    "huya.pet_friend_growth",
+                    &[("grow_cm", &mm_to_cm_str(result.growth_mm))],
+                )
+            } else {
+                String::new()
+            };
 
             let result_key = if result.target.is_pussy() {
                 "huya.pet_friend_result_pussy"
@@ -1697,6 +1710,7 @@ async fn handle_pet_friend(
                     ("stage3", &stage3),
                     ("heal", &result.heal.to_string()),
                     ("xp", &result.xp_gain.to_string()),
+                    ("growth_line", &growth_line),
                     ("depth_line", &depth_line),
                     ("target_hp", &result.target.hp.to_string()),
                     ("target_max_hp", &result.target.max_hp().to_string()),
@@ -3276,6 +3290,10 @@ fn v2_keyboard_overview() -> InlineKeyboardMarkup {
             InlineKeyboardButton::callback(LOCALE.t("ru", "huya.inventory.nav_equip"), "huya_inv_s:e_all"),
             InlineKeyboardButton::callback(LOCALE.t("ru", "huya.inventory.nav_items"), "huya_inv_s:m"),
         ],
+        vec![InlineKeyboardButton::callback(
+            LOCALE.t("ru", "huya.inventory.btn_autoequip"),
+            "huya_inv_auto:o",
+        )],
         vec![
             InlineKeyboardButton::callback(LOCALE.t("ru", "huya.inventory.nav_head"), "huya_inv_s:e_tip"),
             InlineKeyboardButton::callback(LOCALE.t("ru", "huya.inventory.nav_base"), "huya_inv_s:e_base"),
@@ -3313,6 +3331,10 @@ fn v2_keyboard_equip_part(part: &InventoryEquipPart) -> InlineKeyboardMarkup {
             InlineKeyboardButton::callback(nav_equip, "huya_inv_s:e_all"),
             InlineKeyboardButton::callback(nav_items, "huya_inv_s:m"),
         ],
+        vec![InlineKeyboardButton::callback(
+            LOCALE.t("ru", "huya.inventory.btn_autoequip"),
+            format!("huya_inv_auto:e_{}", part.code()),
+        )],
         vec![
             InlineKeyboardButton::callback(mark(LOCALE.t("ru", "huya.inventory.nav_head"), active_tip).as_str(), "huya_inv_s:e_tip"),
             InlineKeyboardButton::callback(mark(LOCALE.t("ru", "huya.inventory.nav_base"), active_base).as_str(), "huya_inv_s:e_base"),
@@ -3587,6 +3609,19 @@ pub async fn huya_inventory_callback(
                 screen_to_render = decode_screen_from_state(return_state);
             }
         }
+    } else if let Some(return_state) = data.strip_prefix("huya_inv_auto:") {
+        let result = huya_db::auto_equip_best(&pool, chat_id_raw, clicker).await?;
+        let text = if result.changed_slots > 0 {
+            LOCALE.t_fmt(
+                "ru",
+                "huya.inventory.autoequip_success",
+                &[("count", &result.changed_slots.to_string())],
+            )
+        } else {
+            LOCALE.t("ru", "huya.inventory.autoequip_no_changes").to_string()
+        };
+        let _ = bot.answer_callback_query(qid.clone()).text(text).await;
+        screen_to_render = decode_screen_from_state(return_state);
     } else if let Some(rest) = data.strip_prefix("huya_inv_equip:") {
         // Format: huya_inv_equip:{inv_id}:{slot}:{return_state}
         let p: Vec<&str> = rest.splitn(3, ':').collect();
@@ -3831,5 +3866,169 @@ pub async fn huya_inventory_callback(
         .parse_mode(teloxide::types::ParseMode::Html)
         .reply_markup(keyboard)
         .await;
+    Ok(())
+}
+
+fn current_datetime_kyiv() -> DateTime<chrono_tz::Tz> {
+    Utc::now().with_timezone(&Kyiv)
+}
+
+fn random_daily_start_utc(now_kyiv: DateTime<chrono_tz::Tz>) -> DateTime<Utc> {
+    let mut rng = rand::rng();
+    let hour = rng.random_range(10..=21);
+    let minute = rng.random_range(0..=59);
+    let date = now_kyiv.date_naive();
+    Kyiv
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
+        .single()
+        .unwrap_or(now_kyiv)
+        .with_timezone(&Utc)
+}
+
+pub async fn run_dutch_helm_scheduler(bot: Bot, pool: PgPool, shutdown: CancellationToken) {
+    let mut interval = tokio::time::interval(Duration::from_secs(15));
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = interval.tick() => {
+                if let Err(err) = dutch_helm_tick(&bot, &pool).await {
+                    tracing::debug!("dutch_helm_tick failed: {:?}", err);
+                }
+            }
+        }
+    }
+}
+
+async fn dutch_helm_tick(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
+    let now_kyiv = current_datetime_kyiv();
+    let event_date = now_kyiv.date_naive();
+    let now_utc = Utc::now();
+    let start_at_utc = random_daily_start_utc(now_kyiv);
+    let join_deadline_at = start_at_utc + ChronoDuration::minutes(2);
+    let seed = {
+        let mut rng = rand::rng();
+        rng.random_range(1..=999_999)
+    };
+    if now_kyiv.hour() == 4 && now_kyiv.minute() <= 1 {
+        let _ = huya_db::cleanup_old_dutch_helm_events(pool, 30).await;
+    }
+
+    let event = if let Some(existing) = huya_db::get_dutch_helm_event_by_date(pool, event_date).await? {
+        existing
+    } else {
+        huya_db::get_or_create_dutch_helm_event(
+            pool,
+            event_date,
+            start_at_utc,
+            join_deadline_at,
+            seed,
+        )
+        .await?
+    };
+
+    if event.status == "scheduled" && now_utc >= event.start_at {
+        if let Some(activated) = huya_db::activate_dutch_helm_event(pool, event.id).await? {
+            let games = game::list_games(pool).await?;
+            for g in games {
+                let text = LOCALE.t_rand_fmt(
+                    &g.lang,
+                    "huya.dutch_helm_stage_start",
+                    &[("minutes", "2")],
+                );
+                let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+                    LOCALE.t(&g.lang, "huya.dutch_helm_btn_join"),
+                    format!("huya_dh_join:{}", activated.id),
+                )]]);
+                let _ = bot
+                    .send_message(ChatId(g.chat_id), text)
+                    .parse_mode(teloxide::types::ParseMode::Html)
+                    .reply_markup(keyboard)
+                    .await;
+            }
+        }
+    }
+
+    if let Some(active) = huya_db::get_active_dutch_helm_event(pool, now_utc).await? {
+        let half_mark = active.start_at + (active.join_deadline_at - active.start_at) / 2;
+        if now_utc >= half_mark && now_utc < (half_mark + ChronoDuration::seconds(20)) {
+            let games = game::list_games(pool).await?;
+            for g in games {
+                let count = huya_db::get_dutch_helm_chat_participants_count(pool, active.id, g.chat_id).await?;
+                let text = LOCALE.t_rand_fmt(
+                    &g.lang,
+                    "huya.dutch_helm_stage_mid",
+                    &[("count", &count.to_string())],
+                );
+                let _ = bot
+                    .send_message(ChatId(g.chat_id), text)
+                    .parse_mode(teloxide::types::ParseMode::Html)
+                    .await;
+            }
+        }
+    }
+
+    if let Some(latest) = huya_db::get_dutch_helm_event_by_date(pool, event_date).await?
+        && latest.status == "active"
+        && now_utc >= latest.join_deadline_at
+    {
+        let summaries = huya_db::finalize_dutch_helm_event(pool, latest.id).await?;
+        for summary in summaries {
+            let g = game::get_or_create_game(pool, summary.chat_id).await?;
+            let text = LOCALE.t_fmt(
+                &g.lang,
+                "huya.dutch_helm_final",
+                &[
+                    ("count", &summary.participants.to_string()),
+                    ("reward_cm", &mm_to_cm_str(summary.reward_mm)),
+                ],
+            );
+            let _ = bot
+                .send_message(ChatId(summary.chat_id), text)
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn huya_dutch_helm_join_callback(
+    bot: Bot,
+    query: CallbackQuery,
+    pool: PgPool,
+) -> Result<(), AppError> {
+    let Some(data) = query.data.as_deref() else {
+        let _ = bot.answer_callback_query(query.id).await;
+        return Ok(());
+    };
+    let mut parts = data.split(':');
+    let _prefix = parts.next();
+    let event_id = parts
+        .next()
+        .and_then(|x| x.parse::<i32>().ok())
+        .unwrap_or_default();
+    let Some(msg) = query.message.as_ref() else {
+        let _ = bot.answer_callback_query(query.id).await;
+        return Ok(());
+    };
+    let chat_id = msg.chat().id.0;
+    let tg_id = query.from.id.0 as i64;
+    let now = Utc::now();
+    let joined = huya_db::join_dutch_helm_event(&pool, event_id, chat_id, tg_id, now).await?;
+    let game = game::get_or_create_game(&pool, chat_id).await?;
+    if joined {
+        let count = huya_db::get_dutch_helm_chat_participants_count(&pool, event_id, chat_id).await?;
+        let text = LOCALE.t_fmt(
+            &game.lang,
+            "huya.dutch_helm_join_ok",
+            &[("count", &count.to_string())],
+        );
+        let _ = bot.answer_callback_query(query.id).text(text).await;
+    } else {
+        let _ = bot
+            .answer_callback_query(query.id)
+            .text(LOCALE.t(&game.lang, "huya.dutch_helm_join_fail"))
+            .await;
+    }
     Ok(())
 }
