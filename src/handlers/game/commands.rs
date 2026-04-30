@@ -843,7 +843,9 @@ pub async fn pidorstats_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    schedule_delete_message(bot.clone(), msg.chat.id, sent.id);
+    let _ = bot.delete_message(msg.chat.id, msg.id).await;
     Ok(())
 }
 
@@ -873,7 +875,9 @@ pub async fn pidorall_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    schedule_delete_message(bot.clone(), msg.chat.id, sent.id);
+    let _ = bot.delete_message(msg.chat.id, msg.id).await;
     Ok(())
 }
 
@@ -903,7 +907,9 @@ pub async fn pidorme_handler(
         if let Some(thread) = topic_thread_id(&msg) {
             request = request.message_thread_id(thread);
         }
-        request.await?;
+        let sent = request.await?;
+        schedule_delete_message(bot.clone(), msg.chat.id, sent.id);
+        let _ = bot.delete_message(msg.chat.id, msg.id).await;
     } else {
         let text = LOCALE.t_fmt(&game.lang, "pidor.static.stats_personal", &[
             ("username", &escape_html(&tg_user.full_username(false))),
@@ -915,7 +921,9 @@ pub async fn pidorme_handler(
         if let Some(thread) = topic_thread_id(&msg) {
             request = request.message_thread_id(thread);
         }
-        request.await?;
+        let sent = request.await?;
+        schedule_delete_message(bot.clone(), msg.chat.id, sent.id);
+        let _ = bot.delete_message(msg.chat.id, msg.id).await;
     }
     Ok(())
 }
@@ -955,7 +963,9 @@ pub async fn pidoryear_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    schedule_delete_message(bot.clone(), msg.chat.id, sent.id);
+    let _ = bot.delete_message(msg.chat.id, msg.id).await;
     Ok(())
 }
 

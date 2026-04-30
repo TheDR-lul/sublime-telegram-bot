@@ -5,4 +5,3 @@ pub mod huya;
 pub mod meme;
 pub mod misc;
 pub mod achievements;
-pub mod rpg;

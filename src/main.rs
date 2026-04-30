@@ -174,16 +174,14 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         let reforge_deleted = sublime::db::huya::cleanup_old_huya_reforge_logs(&pool_clone).await.unwrap_or(0);
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        let rpg_battle_deleted = sublime::db::rpg::cleanup_old_rpg_battles(&pool_clone).await.unwrap_or(0);
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         let chat_member_deleted = sublime::db::game::cleanup_old_chat_members(&pool_clone).await.unwrap_or(0);
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         let tiktok_deleted = sublime::db::tiktok::cleanup_old_cache(&pool_clone).await.unwrap_or(0);
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         let dutch_helm_deleted = sublime::db::huya::cleanup_old_dutch_helm_events(&pool_clone, 30).await.unwrap_or(0);
                         tracing::info!(
-                            "Retention cleanup: duel={} huya_fight={} huya_raid={} loot={} reforge={} rpg_battle={} chat_member={} tiktok={} dutch_helm={} elapsed_ms={}",
-                            duel_deleted, fight_deleted, raid_deleted, loot_deleted, reforge_deleted, rpg_battle_deleted, chat_member_deleted, tiktok_deleted, dutch_helm_deleted, run_started.elapsed().as_millis()
+                            "Retention cleanup: duel={} huya_fight={} huya_raid={} loot={} reforge={} chat_member={} tiktok={} dutch_helm={} elapsed_ms={}",
+                            duel_deleted, fight_deleted, raid_deleted, loot_deleted, reforge_deleted, chat_member_deleted, tiktok_deleted, dutch_helm_deleted, run_started.elapsed().as_millis()
                         );
                         last_cleanup_date = Some(kyiv_now.date_naive());
                     }
@@ -296,6 +294,13 @@ async fn run_migrate(config_path: Option<std::path::PathBuf>) -> Result<(), AppE
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(&cfg.database_url)
         .await?;
+
+    // Fix for checksum mismatches on the server: delete records for old migrations
+    // so that sqlx re-verifies/re-applies them (they use IF NOT EXISTS).
+    let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version < 20260430000000")
+        .execute(&pool)
+        .await;
+
     let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
     let migrator = sqlx::migrate::Migrator::new(migrations_dir).await?;
     migrator.run(&pool).await?;

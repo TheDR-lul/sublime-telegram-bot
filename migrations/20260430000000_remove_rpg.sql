@@ -1,0 +1,7 @@
+-- Remove RPG module tables as it is no longer used.
+DROP TABLE IF EXISTS rpg_battle CASCADE;
+DROP TABLE IF EXISTS rpg_player CASCADE;
+DROP TABLE IF EXISTS rpg_inventory CASCADE;
+DROP TABLE IF EXISTS rpg_equipment CASCADE;
+DROP TABLE IF EXISTS rpg_item CASCADE;
+DROP TABLE IF EXISTS rpg_ui_state CASCADE;

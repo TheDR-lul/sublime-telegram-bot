@@ -140,10 +140,7 @@ async fn callback_router(
     }
     let data = query.data.clone().unwrap_or_default();
     let data_prefix = data.split(':').next().unwrap_or("").to_string();
-    // RPG: development for future — disabled; reply instead of opening menu
-    if data.starts_with("rpg:") {
-        return misc::rpg_disabled_callback(bot, query).await;
-    }
+
     if data.starts_with("menu:") || data.starts_with("topics:") {
         return misc::menu_callback(bot, query, pool, config).await;
     }
@@ -258,14 +255,7 @@ async fn callback_router(
 /// so that MockBot's dependency injection does not require &Message (which comes from the filter).
 pub fn build_message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
     dptree::entry().endpoint(
-        |update: Update, bot: Bot, _pool: PgPool, _config: Config| async move {
-            if let UpdateKind::Message(msg) = update.kind
-                && let Some(text) = msg.text()
-                && let Ok(cmd) = Cmd::parse(text, "")
-                && matches!(cmd, Cmd::Rpg)
-            {
-                return misc::rpg_disabled_handler(bot, msg, cmd).await;
-            }
+        |_update: Update, _bot: Bot, _pool: PgPool, _config: Config| async move {
             Ok(())
         },
     )
@@ -293,7 +283,6 @@ pub fn build_test_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                         Cmd::Shrug => misc::shrug_handler(bot, msg, cmd).await,
                         Cmd::Me(_) => misc::me_handler(bot, msg, cmd).await,
                         Cmd::Google(_) => misc::google_handler(bot, msg, cmd).await,
-                        Cmd::Rpg => misc::rpg_disabled_handler(bot, msg, cmd).await,
                         Cmd::Pidorscan(_) => misc::pidorscan_handler(bot, msg, cmd, dedup).await,
                         Cmd::Pidor => game::pidor_handler(bot, msg, cmd, pool).await,
                         Cmd::Pidorules => game::pidorules_handler(bot, msg, cmd, pool).await,
@@ -344,8 +333,6 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
         .branch(case![Cmd::Shrug].endpoint(misc::shrug_handler))
         .branch(case![Cmd::Me(_s)].endpoint(misc::me_handler))
         .branch(case![Cmd::Google(_s)].endpoint(misc::google_handler))
-        // RPG: development for future — disabled; show stub message
-        .branch(case![Cmd::Rpg].endpoint(misc::rpg_disabled_handler))
         .branch(case![Cmd::Pidorscan(_s)].endpoint(
             |bot: Bot,
              msg: Message,

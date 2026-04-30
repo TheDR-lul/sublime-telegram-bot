@@ -77,7 +77,4 @@ pub enum Cmd {
     Bothere,
     #[command(description = "disable bot in this topic (admins only, forums)")]
     Bothereoff,
-    // RPG: development for future — disabled for now; /rpg shows stub message.
-    #[command(description = "Pidor-Royale RPG (in development)")]
-    Rpg,
 }

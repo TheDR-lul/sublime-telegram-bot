@@ -108,26 +108,6 @@ pub async fn slap_handler(
     Ok(())
 }
 
-pub async fn rpg_disabled_handler(
-    bot: Bot,
-    msg: Message,
-    _: crate::handlers::commands::Cmd,
-) -> Result<(), AppError> {
-    send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "rpg.disabled")).await?;
-    Ok(())
-}
-
-pub async fn rpg_disabled_callback(
-    bot: Bot,
-    query: teloxide::types::CallbackQuery,
-) -> Result<(), AppError> {
-    if let Some(chat_id) = query.message.as_ref().map(|m| m.chat().id) {
-        bot.send_message(chat_id, LOCALE.t("ru", "rpg.disabled")).await?;
-    }
-    bot.answer_callback_query(query.id).await?;
-    Ok(())
-}
-
 pub async fn shrug_handler(
     bot: Bot,
     msg: Message,

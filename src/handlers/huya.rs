@@ -438,10 +438,11 @@ async fn handle_stat(
     }
     let equ = huya_db::get_equipment(pool, chat_id_raw, tg_id).await.unwrap_or_default();
     let inv = huya_db::get_inventory(pool, chat_id_raw, tg_id).await.unwrap_or_default();
-    bot.send_message(chat_id, huya_status_text(&h, name, &equ, &inv))
+    let sent = bot.send_message(chat_id, huya_status_text(&h, name, &equ, &inv))
         .parse_mode(teloxide::types::ParseMode::Html)
         .reply_markup(huya_stat_keyboard(tg_id, actions_available(&h)))
         .await?;
+    schedule_flood_delete(bot, chat_id, sent.id);
     Ok(())
 }
 
@@ -1610,6 +1611,7 @@ async fn handle_steal(
             ("steal_cm",   &mm_to_cm_str(result.steal_mm)),
             ("new_size",   &result.attacker.display_cm()),
             ("chance_pct", &result.chance_pct.to_string()),
+            ("xp_gain",    &result.xp_gain.to_string()),
         ])
     } else if result.backlash_mm > 0 {
         LOCALE.t_rand_fmt("ru", "huya.steal_fail_backlash", &[
@@ -1875,30 +1877,80 @@ pub async fn huyatop_handler(
     if !msg.chat.is_group() && !msg.chat.is_supergroup() {
         return Ok(());
     }
-    let rows = huya_db::top(&pool, msg.chat.id.0, 10).await?;
-    if rows.is_empty() {
+    let from = match msg.from.as_ref() {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+    let tg_id = from.id.0 as i64;
+
+    let res = huya_db::global_top(&pool, tg_id).await?;
+    if res.total_count == 0 {
         send_text_in_origin_topic(&bot, &msg, LOCALE.t("ru", "huya.top_empty")).await?;
         return Ok(());
     }
 
     let mut text = LOCALE.t("ru", "huya.top_header").to_string();
-    for (i, (h, tg_id)) in rows.iter().enumerate() {
-        let name = user::get_by_tg_id(&pool, *tg_id).await?
+
+    // Local helper to format entry line
+    async fn format_line(pool: &PgPool, e: &huya_db::HuyaTopEntry) -> String {
+        let name = user::get_by_tg_id(pool, e.tg_id).await.ok().flatten()
             .map(|u| u.full_username(false))
-            .unwrap_or_else(|| format!("user_{}", tg_id));
-        let medal = match i { 0 => "🥇", 1 => "🥈", 2 => "🥉", _ => "•" };
-        let line = if h.is_pussy() {
+            .unwrap_or_else(|| format!("user_{}", e.tg_id));
+        
+        let medal = match e.rank {
+            1 => "🥇".to_string(),
+            2 => "🥈".to_string(),
+            3 => "🥉".to_string(),
+            r => format!("{} ", r),
+        };
+
+        let size_abs = e.length_mm.abs();
+        let size_str = format!("{}.{}", size_abs / 10, size_abs % 10);
+
+        if e.length_mm < 0 {
             LOCALE.t_fmt("ru", "huya.top_entry_pussy", &[
-                ("medal", medal), ("name", &escape_html(&name)), ("size", &h.display_cm()),
+                ("medal", &medal), ("name", &escape_html(&name)), ("size", &size_str),
             ])
         } else {
             LOCALE.t_fmt("ru", "huya.top_entry", &[
-                ("medal", medal), ("name", &escape_html(&name)),
-                ("size", &h.display_cm()), ("level", &h.level.to_string()),
+                ("medal", &medal), ("name", &escape_html(&name)),
+                ("size", &size_str), ("level", &e.level.to_string()),
             ])
-        };
-        text.push_str(&line);
+        }
     }
+
+    // 1. Top 10
+    for e in &res.top_10 {
+        text.push_str(&format_line(&pool, e).await);
+    }
+
+    // 2. User context
+    if let Some(user_rank) = res.user_rank {
+        if user_rank > 10 {
+            text.push_str("...\n");
+            for e in &res.user_context {
+                text.push_str(&format_line(&pool, e).await);
+            }
+        }
+    }
+
+    // 3. Random entries
+    let mut shown_ids: std::collections::HashSet<i64> = res.top_10.iter().map(|x| x.tg_id).collect();
+    shown_ids.extend(res.user_context.iter().map(|x| x.tg_id));
+
+    let mut randoms_shown = 0;
+    for e in &res.random_entries {
+        if !shown_ids.contains(&e.tg_id) {
+            if randoms_shown == 0 {
+                text.push_str("...\n");
+            }
+            text.push_str(&format_line(&pool, e).await);
+            randoms_shown += 1;
+            if randoms_shown >= 3 { break; }
+        }
+    }
+
+    text.push_str(&format!("\nВсього не-нульових хуяк: {}", res.total_count));
 
     let mut request = bot
         .send_message(msg.chat.id, text)
@@ -1906,7 +1958,8 @@ pub async fn huyatop_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    schedule_flood_delete(&bot, msg.chat.id, sent.id);
     Ok(())
 }
 
@@ -2031,7 +2084,7 @@ fn skills_text(h: &Huya, name: &str) -> String {
         tier2_lines.push(line("spirit", h.skill_spirit, CAP_T2, "+12 HP/round win"));
     }
     if h.skill_cunning >= 8 || h.skill_pickpocket > 0 {
-        tier2_lines.push(line("pickpocket", h.skill_pickpocket, CAP_T2, "steal XP"));
+        tier2_lines.push(line("pickpocket", h.skill_pickpocket, CAP_T2, "доп. опыт при краже"));
     }
     if h.skill_stamina >= 8 || h.skill_dynamo > 0 {
         tier2_lines.push(line("dynamo", h.skill_dynamo, CAP_T2, &format!("+{} max act", h.skill_dynamo / 5)));
@@ -2364,7 +2417,9 @@ pub async fn huyashop_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    schedule_flood_delete(&bot, msg.chat.id, sent.id);
+    schedule_flood_delete(&bot, msg.chat.id, msg.id);
     Ok(())
 }
 
@@ -2563,9 +2618,9 @@ pub async fn huyachest_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         req = req.message_thread_id(thread);
     }
-    req.await?;
-    // Keep chat clean: remove the command message after opening menu.
-    let _ = bot.delete_message(msg.chat.id, msg.id).await;
+    let sent = req.await?;
+    schedule_flood_delete(&bot, msg.chat.id, sent.id);
+    schedule_flood_delete(&bot, msg.chat.id, msg.id);
     Ok(())
 }
 
@@ -3580,7 +3635,9 @@ pub async fn huyainv_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         req = req.message_thread_id(thread);
     }
-    req.await?;
+    let sent = req.await?;
+    schedule_flood_delete(&bot, msg.chat.id, sent.id);
+    schedule_flood_delete(&bot, msg.chat.id, msg.id);
     let elapsed = started_at.elapsed();
     if elapsed.as_millis() >= 500 {
         tracing::info!(

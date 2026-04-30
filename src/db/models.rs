@@ -186,7 +186,7 @@ pub struct Huya {
     pub skill_pierce:     i32, // ignore 4% enemy DEF/lv  (shaft>=8)
     pub skill_scales:     i32, // -2.5% steal-vs-you/lv   (skin>=8)
     pub skill_spirit:     i32, // +12 HP on round win/lv  (balls>=8)
-    pub skill_pickpocket: i32, // steal takes 3% XP/lv    (cunning>=8)
+    pub skill_pickpocket: i32, // +XP bonus on successful steal (cunning>=8)
     pub skill_dynamo:     i32, // +1 max action per 5 lv  (stamina>=8)
     // Tier 3 — cross-branch combos (cap 10, cost 3 SP; require 2x T2 >= 5)
     pub skill_eggtwist:    i32, // round 3 deals x2 dmg     (pierce+spirit>=5)

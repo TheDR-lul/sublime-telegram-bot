@@ -554,19 +554,6 @@ text = "Бот для игры «Пидор Дня» и развлечений �
 echo_title       = "Echo"
 echo_desc        = "Just echo what you have typed"
 caps_title       = "Caps"
-caps_desc        = "Make query text upper case"
-shuffle_title    = "Shuffle"
-shuffle_desc     = "Shuffle all the letters inside words"
-google_no_query  = "What should I search for?"
-
-# ── RPG (заглушка) ───────────────────────────────────────────
-[rpg]
-disabled = "Pidor-Royale RPG — в разработке на будущее. Следите за обновлениями."
-
-# ── Watchdog ─────────────────────────────────────────────────
-[watchdog]
-running          = "Бот работает."
-not_running      = "Бот не запущен."
 # {chats} {users}
 stats            = "Чатов с ботом: {chats}\nУникальных пользователей: {users}"
 no_db            = "Статистика недоступна (не задан DATABASE_URL)."
@@ -828,7 +815,7 @@ fight_not_your_turn = "Это не твой бой!"
 
 # Кража
 # {attacker} {target} {steal_cm} {new_size} {chance_pct}
-steal_success = "🥷 <b>{attacker}</b> тайно утащил {steal_cm} см у <b>{target}</b>! Шанс был {chance_pct}%. Теперь у тебя: {new_size} см"
+steal_success = "🥷 <b>{attacker}</b> тайно утащил {steal_cm} см у <b>{target}</b>! Шанс был {chance_pct}%. ✨ Получено: {xp_gain} XP. Теперь у тебя: {new_size} см"
 # {attacker} {target} {chance_pct}
 steal_fail    = "🙅 <b>{attacker}</b> пытался обчистить <b>{target}</b>. Шанс был {chance_pct}%, но облажался!"
 # {attacker} {target} {chance_pct} {backlash_cm} {new_size}

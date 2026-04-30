@@ -500,6 +500,85 @@ pub async fn steal_attempt(
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HuyaTopEntry {
+    pub tg_id: i64,
+    pub length_mm: i32,
+    pub level: i32,
+    pub rank: i64,
+}
+
+pub struct GlobalTopResult {
+    pub top_10: Vec<HuyaTopEntry>,
+    pub user_context: Vec<HuyaTopEntry>,
+    pub random_entries: Vec<HuyaTopEntry>,
+    pub total_count: i64,
+    pub user_rank: Option<i64>,
+}
+
+pub async fn global_top(pool: &PgPool, user_tg_id: i64) -> Result<GlobalTopResult, AppError> {
+    // 1. Total count of non-zero entries
+    let total_count: i64 = sqlx::query_scalar("SELECT count(*) FROM huya WHERE length_mm <> 0")
+        .fetch_one(pool)
+        .await?;
+
+    // 2. Top 10 global
+    let top_10 = sqlx::query_as::<_, HuyaTopEntry>(
+        "SELECT tg_id, length_mm, level, rank() OVER (ORDER BY length_mm DESC) as rank
+         FROM huya WHERE length_mm <> 0
+         ORDER BY length_mm DESC LIMIT 10"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // 3. User's rank
+    let user_rank: Option<i64> = sqlx::query_scalar(
+        "SELECT rank FROM (
+            SELECT tg_id, rank() OVER (ORDER BY length_mm DESC) as rank
+            FROM huya WHERE length_mm <> 0
+         ) s WHERE tg_id = $1"
+    )
+    .bind(user_tg_id)
+    .fetch_optional(pool)
+    .await?;
+
+    // 4. User context (rank-2 to rank+2)
+    let mut user_context = Vec::new();
+    if let Some(rank) = user_rank {
+        // Only fetch context if the user is NOT in the top 10 already
+        // (actually, always fetch it, we'll deduplicate or skip in handler)
+        user_context = sqlx::query_as::<_, HuyaTopEntry>(
+            "SELECT * FROM (
+                SELECT tg_id, length_mm, level, rank() OVER (ORDER BY length_mm DESC) as rank
+                FROM huya WHERE length_mm <> 0
+             ) s WHERE rank BETWEEN $1 AND $2
+             ORDER BY rank ASC",
+        )
+        .bind(rank - 2)
+        .bind(rank + 2)
+        .fetch_all(pool)
+        .await?;
+    }
+
+    // 5. Random entries (non-zero size)
+    let random_entries = sqlx::query_as::<_, HuyaTopEntry>(
+        "SELECT * FROM (
+            SELECT tg_id, length_mm, level, rank() OVER (ORDER BY length_mm DESC) as rank
+            FROM huya WHERE length_mm <> 0
+         ) s ORDER BY RANDOM() LIMIT 3"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(GlobalTopResult {
+        top_10,
+        user_context,
+        random_entries,
+        total_count,
+        user_rank,
+    })
+}
+
 pub async fn top(pool: &PgPool, _chat_id: i64, limit: i64) -> Result<Vec<(Huya, i64)>, AppError> {
     let rows = sqlx::query_as::<_, Huya>(
         &format!("SELECT {HUYA_SELECT} FROM huya ORDER BY length_mm DESC LIMIT $1"),
@@ -1859,14 +1938,13 @@ pub async fn pet_friend(
     };
 
     let updated_from_with_xp = apply_xp_gain(pool, updated_from.id, xp_gain).await?;
+    let target_updated_with_xp = apply_xp_gain(pool, target_huya.id, xp_gain).await?;
 
     register_pet_friend(pool, chat_id, from_tg_id, target_tg_id).await?;
 
-    let (target_updated, _) = get_or_create(pool, chat_id, target_tg_id).await?;
-
     Ok(PetFriendResult {
         from: updated_from_with_xp,
-        target: target_updated,
+        target: target_updated_with_xp,
         heal,
         growth_mm,
         xp_gain,

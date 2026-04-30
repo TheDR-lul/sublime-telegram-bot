@@ -146,8 +146,8 @@ pub async fn achievements_handler(
         request = request.message_thread_id(thread);
     }
     let sent = request.await?;
-
-    schedule_ach_delete(bot, msg.chat.id, sent.id);
+    schedule_ach_delete(bot.clone(), msg.chat.id, sent.id);
+    let _ = bot.delete_message(msg.chat.id, msg.id).await;
     Ok(())
 }
 
