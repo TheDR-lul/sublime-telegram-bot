@@ -453,17 +453,7 @@ fn message_schema() -> teloxide::dispatching::UpdateHandler<AppError> {
                 meme::meme_handler(bot, msg, cmd).await
             },
         ))
-        .branch(case![Cmd::Meme].endpoint(
-            |bot: Bot,
-             msg: Message,
-             cmd: Cmd,
-             rl: std::sync::Arc<crate::ratelimit::RateLimiter>| async move {
-                if !check_rate_limit(&rl, &msg).await {
-                    return Ok(());
-                }
-                meme::meme_handler(bot, msg, cmd).await
-            },
-        ))
+
         .branch(case![Cmd::Bothere].endpoint(|bot: Bot, msg: Message, cmd: Cmd, pool: PgPool| async move {
             misc::bothere_handler(bot, msg, cmd, pool).await
         }))

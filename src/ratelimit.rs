@@ -25,6 +25,9 @@ impl RateLimiter {
         match guard.get(&key) {
             Some(&last) if now.duration_since(last) < self.cooldown => false,
             _ => {
+                if guard.len() > 10000 {
+                    guard.retain(|_, &mut last| now.duration_since(last) < self.cooldown * 2);
+                }
                 guard.insert(key, now);
                 true
             }

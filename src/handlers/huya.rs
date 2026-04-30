@@ -8,7 +8,7 @@ use chrono_tz::Europe::Kyiv;
 use rand::RngExt;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId};
-use std::io::Write;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use teloxide::utils::html::escape as escape_html;
@@ -328,52 +328,7 @@ fn fight_pick_keyboard(fight_id: i32) -> InlineKeyboardMarkup {
     ]])
 }
 
-// #region agent log
-fn agent_debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("debug-3e7364.log")
-    {
-        let payload = serde_json::json!({
-            "sessionId": "3e7364",
-            "runId": "pre-fix",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-        });
-        let _ = writeln!(file, "{}", payload.to_string());
-    }
-}
-// #endregion
 
-// #region agent log 6f3178
-fn agent_debug_log_6f3178(
-    hypothesis_id: &str,
-    location: &str,
-    message: &str,
-    data: serde_json::Value,
-) {
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("debug-6f3178.log")
-    {
-        let payload = serde_json::json!({
-            "sessionId": "6f3178",
-            "runId": "pre-fix",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-        });
-        let _ = writeln!(file, "{}", payload.to_string());
-    }
-}
-// #endregion
 
 // ── Target resolution ─────────────────────────────────────────────────────────
 
@@ -763,7 +718,7 @@ pub async fn huya_fight_decline_callback(
     // Refund challenger's action.
     let (ch_huya, _) = huya_db::get_or_create(&pool, fight.chat_id, fight.challenger_tg_id).await?;
     let _ = sqlx::query("UPDATE huya SET actions_left = LEAST(actions_left + 1, $1) WHERE id = $2")
-        .bind(4_i32).bind(ch_huya.id).execute(&pool).await;
+        .bind(ch_huya.max_actions()).bind(ch_huya.id).execute(&pool).await;
 
     let decliner = display_name_from_user(&query.from);
 
@@ -1861,18 +1816,7 @@ pub async fn huyapet_handler(
         _ => "",
     };
 
-    agent_debug_log_6f3178(
-        "H-pet-1",
-        "huya.rs:huyapet_handler",
-        "enter_huyapet_handler",
-        serde_json::json!({
-            "raw_text": msg.text(),
-            "from_tg_id": from.id.0 as i64,
-            "chat_id": chat_id_raw,
-            "arg": arg,
-            "has_reply": msg.reply_to_message().is_some(),
-        }),
-    );
+
 
     handle_pet_friend(&bot, &pool, &msg, chat_id_raw, from, &from_name, arg).await
 }

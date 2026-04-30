@@ -54,9 +54,6 @@ async fn apply_xp_gain(pool: &PgPool, huya_id: i32, gained_xp: i32) -> Result<Hu
     .await?;
 
     let (new_xp, new_level, level_ups) = calc_level_progress(current.xp, current.level, gained_xp);
-    if level_ups == 0 {
-        return Ok(current);
-    }
 
     let updated = sqlx::query_as::<_, Huya>(&format!(
         "UPDATE huya
@@ -143,7 +140,7 @@ pub async fn get_or_create(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<(H
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 
-async fn energy_limit_enabled(pool: &PgPool, chat_id: i64) -> Result<bool, AppError> {
+async fn energy_limit_enabled(pool: &PgPool, _chat_id: i64) -> Result<bool, AppError> {
     // Per-plan: allow turning energy limit on/off at runtime via KV.
     // Key: "huya_energy_limit", chat_id=0 for global flag.
     if let Some(item) = kv::get(pool, 0, "huya_energy_limit").await? {
@@ -177,9 +174,9 @@ pub async fn consume_action(pool: &PgPool, huya: &Huya) -> Result<bool, AppError
     }
 
     if huya.actions_reset_at < today {
-        sqlx::query(
+        let res = sqlx::query(
             "UPDATE huya SET actions_left = $1, actions_reset_at = $2,
-             hp = LEAST(hp + $3, $4) WHERE id = $5",
+             hp = LEAST(hp + $3, $4) WHERE id = $5 AND actions_reset_at < $2",
         )
         .bind(max_actions - 1)
         .bind(today)
@@ -188,23 +185,23 @@ pub async fn consume_action(pool: &PgPool, huya: &Huya) -> Result<bool, AppError
         .bind(huya.id)
         .execute(pool)
         .await?;
-        return Ok(true);
+        
+        if res.rows_affected() > 0 {
+            return Ok(true);
+        }
     }
 
-    if huya.actions_left <= 0 {
-        return Ok(false);
-    }
-
-    sqlx::query(
+    let res = sqlx::query(
         "UPDATE huya SET actions_left = actions_left - 1,
-         hp = LEAST(hp + $1, $2) WHERE id = $3",
+         hp = LEAST(hp + $1, $2) WHERE id = $3 AND actions_left > 0",
     )
     .bind(hp_regen)
     .bind(max_hp)
     .bind(huya.id)
     .execute(pool)
     .await?;
-    Ok(true)
+    
+    Ok(res.rows_affected() > 0)
 }
 
 // ── Grow ─────────────────────────────────────────────────────────────────────
@@ -454,15 +451,19 @@ pub async fn steal_attempt(
     };
 
     if success {
+        let mut tx = pool.begin().await?;
         sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE id = $2")
-            .bind(steal_mm).bind(att.id).execute(pool).await?;
+            .bind(steal_mm).bind(att.id).execute(&mut *tx).await?;
         sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 0) WHERE id = $2")
-            .bind(steal_mm).bind(tgt.id).execute(pool).await?;
+            .bind(steal_mm).bind(tgt.id).execute(&mut *tx).await?;
+        tx.commit().await?;
     } else if backlash_mm > 0 {
+        let mut tx = pool.begin().await?;
         sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 0) WHERE id = $2")
-            .bind(backlash_mm).bind(att.id).execute(pool).await?;
+            .bind(backlash_mm).bind(att.id).execute(&mut *tx).await?;
         sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE id = $2")
-            .bind(backlash_mm).bind(tgt.id).execute(pool).await?;
+            .bind(backlash_mm).bind(tgt.id).execute(&mut *tx).await?;
+        tx.commit().await?;
     }
     // One steal attempt consumes temporary steal booster.
     if att.steal_boost > 0 {
@@ -560,7 +561,7 @@ pub fn slot_unlocked_for_length(slot: &str, length_mm: i32) -> bool {
     matches!(slot, "tip" | "base" | "balls")
 }
 
-pub async fn get_inventory(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Vec<HuyaInventoryItem>, AppError> {
+pub async fn get_inventory(pool: &PgPool, _chat_id: i64, tg_id: i64) -> Result<Vec<HuyaInventoryItem>, AppError> {
     let items = sqlx::query_as::<_, HuyaInventoryItem>(
         "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name, \
                 roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope, \
@@ -574,7 +575,7 @@ pub async fn get_inventory(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Ve
     Ok(items)
 }
 
-pub async fn get_equipment(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<Vec<HuyaEquipmentSlot>, AppError> {
+pub async fn get_equipment(pool: &PgPool, _chat_id: i64, tg_id: i64) -> Result<Vec<HuyaEquipmentSlot>, AppError> {
     let rows = sqlx::query_as::<_, HuyaEquipmentSlot>(
         "SELECT DISTINCT ON (slot) chat_id, tg_id, slot, inventory_id \
          FROM huya_equipment WHERE tg_id = $1 \
@@ -697,7 +698,7 @@ fn rarity_allowed(chest_id: &str, rarity: &str) -> bool {
 
 pub async fn claim_daily_chest(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     tg_id: i64,
     chest_id: &str,
 ) -> Result<(bool, Option<i64>), AppError> {
@@ -1061,7 +1062,7 @@ pub async fn auto_equip_best(
 
 pub async fn sell_inventory_item(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     tg_id: i64,
     inventory_id: i32,
 ) -> Result<SellItemResult, AppError> {
@@ -1097,7 +1098,7 @@ pub async fn sell_inventory_item(
 
 pub async fn use_booster_item(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     tg_id: i64,
     inventory_id: i32,
 ) -> Result<UseBoosterResult, AppError> {
@@ -1148,7 +1149,7 @@ pub async fn use_booster_item(
 
 pub async fn socketed_gems_for_item(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     tg_id: i64,
     item_inventory_id: i32,
 ) -> Result<Vec<HuyaSocketedGem>, AppError> {
@@ -1167,7 +1168,7 @@ pub async fn socketed_gems_for_item(
 
 pub async fn all_socketed_gems_for_player(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     tg_id: i64,
 ) -> Result<Vec<HuyaSocketedGem>, AppError> {
     let rows = sqlx::query_as::<_, HuyaSocketedGem>(
@@ -1184,7 +1185,7 @@ pub async fn all_socketed_gems_for_player(
 
 pub async fn available_gems(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     tg_id: i64,
 ) -> Result<Vec<HuyaInventoryItem>, AppError> {
     let rows = sqlx::query_as::<_, HuyaInventoryItem>(
@@ -1448,7 +1449,7 @@ pub struct EquipmentEffects {
     pub grow_bonus_pct: f64,
 }
 
-pub async fn equipment_effects_for_player(pool: &PgPool, chat_id: i64, tg_id: i64) -> Result<EquipmentEffects, AppError> {
+pub async fn equipment_effects_for_player(pool: &PgPool, _chat_id: i64, tg_id: i64) -> Result<EquipmentEffects, AppError> {
     let rows = sqlx::query_as::<_, HuyaInventoryItem>(
         "WITH eq AS (
             SELECT DISTINCT ON (slot) tg_id, slot, inventory_id
@@ -1524,7 +1525,7 @@ pub async fn equipment_effects_for_player(pool: &PgPool, chat_id: i64, tg_id: i6
 /// Unequip a slot.
 pub async fn unequip_item(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     tg_id: i64,
     slot: &str,
 ) -> Result<UnequipItemResult, AppError> {
@@ -1545,7 +1546,7 @@ pub async fn unequip_item(
 /// When loser loses ring slots due to shrink, transfer one highest ring_X slot to winner.
 async fn drop_rings_on_shrink(
     pool: &PgPool,
-    chat_id: i64,
+    _chat_id: i64,
     winner_tg_id: i64,
     loser_tg_id: i64,
     loser_old_len: i32,
@@ -2975,11 +2976,11 @@ pub async fn process_round(
     let mut new_ch_hp = (fight.ch_hp - ch_damage).max(0);
     let mut new_tg_hp = (fight.tg_hp - tg_damage).max(0);
     // Thorns-style reflect from equipment traits.
-    if ch_damage > 0 && tg_fx.reflect_pct > 0.0 {
-        new_ch_hp = (new_ch_hp - (ch_damage as f64 * tg_fx.reflect_pct).round() as i32).max(0);
+    if ch_damage > 0 && ch_fx.reflect_pct > 0.0 {
+        new_tg_hp = (new_tg_hp - (ch_damage as f64 * ch_fx.reflect_pct).round() as i32).max(0);
     }
-    if tg_damage > 0 && ch_fx.reflect_pct > 0.0 {
-        new_tg_hp = (new_tg_hp - (tg_damage as f64 * ch_fx.reflect_pct).round() as i32).max(0);
+    if tg_damage > 0 && tg_fx.reflect_pct > 0.0 {
+        new_ch_hp = (new_ch_hp - (tg_damage as f64 * tg_fx.reflect_pct).round() as i32).max(0);
     }
 
     // Spirit: heal on round win
@@ -2995,7 +2996,7 @@ pub async fn process_round(
     }
 
     let new_round = fight.round + 1;
-    let fight_over = new_ch_hp == 0 || new_tg_hp == 0;
+    let fight_over = new_ch_hp == 0 || new_tg_hp == 0 || new_round > 5;
 
     let fight_winner_tg_id = if fight_over {
         if new_ch_hp > new_tg_hp {
@@ -3067,16 +3068,26 @@ pub async fn finalize_fight_result(
     };
     let loser_new_len = (loser.length_mm - steal_actual).max(0);
 
+    let mut tx = pool.begin().await?;
+    
     sqlx::query("UPDATE huya SET length_mm = length_mm + $1, fights_won = fights_won + 1 WHERE id = $2")
-        .bind(steal_actual).bind(winner.id).execute(pool).await?;
+        .bind(steal_actual).bind(winner.id).execute(&mut *tx).await?;
     sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 0), fights_lost = fights_lost + 1 WHERE id = $2")
-        .bind(steal_actual).bind(loser.id).execute(pool).await?;
+        .bind(steal_actual).bind(loser.id).execute(&mut *tx).await?;
 
     // Fortress: clamp loser to 10mm min
     if loser.skill_fortress > 0 && loser_new_len < 10 {
         sqlx::query("UPDATE huya SET length_mm = 10 WHERE id = $1 AND length_mm < 10")
-            .bind(loser.id).execute(pool).await?;
+            .bind(loser.id).execute(&mut *tx).await?;
     }
+
+    // Write final HP back (min 1) and clear boosts.
+    sqlx::query("UPDATE huya SET hp = $1, atk_boost = 0, def_boost = 0 WHERE id = $2")
+        .bind(fight.ch_hp.max(1)).bind(ch.id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE huya SET hp = $1, atk_boost = 0, def_boost = 0 WHERE id = $2")
+        .bind(fight.tg_hp.max(1)).bind(tg.id).execute(&mut *tx).await?;
+
+    tx.commit().await?;
 
     // Drop ring loot if loser lost available ring slots.
     drop_rings_on_shrink(
@@ -3096,12 +3107,6 @@ pub async fn finalize_fight_result(
         sqlx::query("UPDATE huya SET hp = LEAST(hp + $1, $2) WHERE id = $3")
             .bind(heal).bind(winner_max_hp).bind(winner.id).execute(pool).await?;
     }
-
-    // Write final HP back (min 1) and clear boosts.
-    sqlx::query("UPDATE huya SET hp = $1, atk_boost = 0, def_boost = 0 WHERE id = $2")
-        .bind(fight.ch_hp.max(1)).bind(ch.id).execute(pool).await?;
-    sqlx::query("UPDATE huya SET hp = $1, atk_boost = 0, def_boost = 0 WHERE id = $2")
-        .bind(fight.tg_hp.max(1)).bind(tg.id).execute(pool).await?;
 
     Ok((steal_actual, elo_gain))
 }
