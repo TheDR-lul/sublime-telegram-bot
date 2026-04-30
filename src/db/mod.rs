@@ -8,6 +8,7 @@ pub mod bet;
 pub mod duel;
 pub mod huya;
 pub mod chat_topics;
+pub mod tiktok;
 
 pub use game::*;
 pub use kv::*;

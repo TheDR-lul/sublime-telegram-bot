@@ -3,24 +3,43 @@
 //!           /huyatop, /huyareg, /huyaskills, /huyashop
 
 use sqlx::{self, PgPool};
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Utc};
 use chrono_tz::Europe::Kyiv;
 use rand::RngExt;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId};
 use std::io::Write;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 use teloxide::utils::html::escape as escape_html;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+use std::time::Instant;
 
 use crate::db::game;
 use crate::db::huya as huya_db;
+use crate::db::kv;
 use crate::db::models::Huya;
 use crate::db::user;
 use crate::error::AppError;
 use crate::i18n::LOCALE;
 use crate::telegram::topic_routing::{send_text_in_origin_topic, topic_thread_id};
 use crate::telegram::target_resolver::{resolve_target as resolve_target_global, ResolvedTarget};
+
+const LOCAL_DUTCH_HELM_JOIN_SECS: i64 = 120;
+const FLOOD_MESSAGE_DELETE_AFTER_SECS: u64 = 120;
+
+#[derive(Clone)]
+struct LocalDutchHelmState {
+    deadline_at: DateTime<Utc>,
+    participants: HashSet<i64>,
+}
+
+static LOCAL_DUTCH_HELM_STATE: LazyLock<tokio::sync::RwLock<HashMap<i64, LocalDutchHelmState>>> =
+    LazyLock::new(|| tokio::sync::RwLock::new(HashMap::new()));
+static DUTCH_HELM_STAGE_MARKS: LazyLock<tokio::sync::RwLock<HashSet<String>>> =
+    LazyLock::new(|| tokio::sync::RwLock::new(HashSet::new()));
+const DUTCH_HELM_NOTIFY_KEY: &str = "huya_dutch_helm_notify";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,6 +114,14 @@ fn hp_bar_str(current: i32, max: i32) -> String {
     let filled = ((current.max(0) as f64 / max as f64) * 10.0).round() as usize;
     let filled = filled.min(10);
     format!("[{}{}]", "█".repeat(filled), "░".repeat(10 - filled))
+}
+
+fn schedule_flood_delete(bot: &Bot, chat_id: ChatId, message_id: MessageId) {
+    let bot = bot.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(FLOOD_MESSAGE_DELETE_AFTER_SECS)).await;
+        let _ = bot.delete_message(chat_id, message_id).await;
+    });
 }
 
 /// Build equipment summary string for status.
@@ -241,9 +268,10 @@ async fn send_grow_staging_messages(
     };
 
     let stage1 = LOCALE.t_rand_fmt("ru", stage1_key, &[("name", &escaped_name)]);
-    bot.send_message(chat_id, stage1)
+    let stage1_sent = bot.send_message(chat_id, stage1)
         .parse_mode(teloxide::types::ParseMode::Html)
         .await?;
+    schedule_flood_delete(bot, chat_id, stage1_sent.id);
 
     // Grow narrative has variable pacing: 0..2 middle lines.
     let middle_lines = {
@@ -253,16 +281,18 @@ async fn send_grow_staging_messages(
     for _ in 0..middle_lines {
         let stage2 = LOCALE.t_rand_fmt("ru", stage2_key, &[("name", &escaped_name)]);
         tokio::time::sleep(Duration::from_millis(700)).await;
-        bot.send_message(chat_id, stage2)
+        let stage2_sent = bot.send_message(chat_id, stage2)
             .parse_mode(teloxide::types::ParseMode::Html)
             .await?;
+        schedule_flood_delete(bot, chat_id, stage2_sent.id);
     }
 
     let stage3 = LOCALE.t_rand_fmt("ru", stage3_key, &[("name", &escaped_name)]);
     tokio::time::sleep(Duration::from_millis(700)).await;
-    bot.send_message(chat_id, stage3)
+    let stage3_sent = bot.send_message(chat_id, stage3)
         .parse_mode(teloxide::types::ParseMode::Html)
         .await?;
+    schedule_flood_delete(bot, chat_id, stage3_sent.id);
     Ok(())
 }
 
@@ -355,6 +385,7 @@ pub async fn huya_handler(
     cmd: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    let started_at = Instant::now();
     if !msg.chat.is_group() && !msg.chat.is_supergroup() {
         let _ = crate::alerts::notify(
             &pool,
@@ -374,7 +405,17 @@ pub async fn huya_handler(
     user::upsert_tg_user(&pool, from).await?;
 
     use crate::handlers::commands::Cmd;
-    match &cmd {
+    let cmd_name = match &cmd {
+        Cmd::Huyagrow => "huyagrow",
+        Cmd::Huyafight(_) => "huyafight",
+        Cmd::Huyasteal(_) => "huyasteal",
+        Cmd::Huyaraid(_) => "huyaraid",
+        Cmd::Huyachest => "huyachest",
+        Cmd::Huyainv => "huyainv",
+        Cmd::Huya(_) => "huya",
+        _ => "huya_stat",
+    };
+    let result = match &cmd {
         Cmd::Huyagrow => {
             handle_grow(&bot, &pool, msg.chat.id, chat_id, tg_id, &name).await
         }
@@ -404,11 +445,23 @@ pub async fn huya_handler(
                 "steal" => handle_steal(&bot, &pool, &msg, chat_id, tg_id, &name, arg).await,
                 "raid"  => handle_raid(&bot, &pool, &msg, chat_id, tg_id, &name, arg).await,
                 "pet"   => handle_pet_friend(&bot, &pool, &msg, chat_id, from, &name, arg).await,
+                "helm"  => handle_local_dutch_helm_start(&bot, &pool, &msg, tg_id).await,
                 _       => handle_stat(&bot, &pool, msg.chat.id, chat_id, tg_id, &name).await,
             }
         }
         _ => handle_stat(&bot, &pool, msg.chat.id, chat_id, tg_id, &name).await,
+    };
+    let elapsed = started_at.elapsed();
+    if elapsed.as_millis() >= 500 {
+        tracing::info!(
+            "slow huya command handler: cmd='{}' chat_id={} tg_id={} elapsed_ms={}",
+            cmd_name,
+            chat_id,
+            tg_id,
+            elapsed.as_millis()
+        );
     }
+    result
 }
 
 // ── Stat ──────────────────────────────────────────────────────────────────────
@@ -731,6 +784,7 @@ pub async fn huya_fight_move_callback(
     query: CallbackQuery,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    let callback_started = Instant::now();
     let data = query.data.as_deref().unwrap_or("");
     let parts: Vec<&str> = data.splitn(3, ':').collect();
     if parts.len() < 3 {
@@ -748,6 +802,7 @@ pub async fn huya_fight_move_callback(
 
     let clicker = query.from.id.0 as i64;
 
+    let db_started = Instant::now();
     let fight = match huya_db::get_fight(&pool, fight_id).await? {
         Some(f) if f.status == "active" => f,
         _ => {
@@ -755,6 +810,10 @@ pub async fn huya_fight_move_callback(
             return Ok(());
         }
     };
+    let get_fight_ms = db_started.elapsed().as_millis();
+    if get_fight_ms >= 150 {
+        tracing::debug!("huya_fight_move:get_fight slow ms={}", get_fight_ms);
+    }
 
     if clicker != fight.challenger_tg_id && clicker != fight.target_tg_id {
         let _ = bot.answer_callback_query(query.id).text(LOCALE.t("ru", "huya.fight_not_your_turn")).await;
@@ -782,6 +841,7 @@ pub async fn huya_fight_move_callback(
     let ch_max = ch_huya.max_hp();
     let tg_max = tg_huya.max_hp();
 
+    let db_started = Instant::now();
     let updated = match huya_db::store_pick(&pool, fight_id, clicker, pick_id).await? {
         Some(f) => f,
         None => {
@@ -789,6 +849,10 @@ pub async fn huya_fight_move_callback(
             return Ok(());
         }
     };
+    let store_pick_ms = db_started.elapsed().as_millis();
+    if store_pick_ms >= 150 {
+        tracing::debug!("huya_fight_move:store_pick slow ms={}", store_pick_ms);
+    }
 
     let _ = bot.answer_callback_query(query.id)
         .text(format!("Ты выбрал {}!", move_emoji(pick_id)))
@@ -818,7 +882,12 @@ pub async fn huya_fight_move_callback(
     let tg_pick = updated.target_pick.unwrap();
     let prev_round = updated.round; // round number of the round that just concluded
 
+    let db_started = Instant::now();
     let round_result = huya_db::process_round(&pool, &updated, ch_pick, tg_pick).await?;
+    let process_round_ms = db_started.elapsed().as_millis();
+    if process_round_ms >= 150 {
+        tracing::debug!("huya_fight_move:process_round slow ms={}", process_round_ms);
+    }
 
     // Build round summary line.
     let round_summary = if round_result.round_winner_tg_id.is_none() {
@@ -912,6 +981,15 @@ pub async fn huya_fight_move_callback(
         }
     }
 
+    let elapsed = callback_started.elapsed();
+    if elapsed.as_millis() >= 500 {
+        tracing::info!(
+            "slow huya fight callback: fight_id={} tg_id={} elapsed_ms={}",
+            fight_id,
+            clicker,
+            elapsed.as_millis()
+        );
+    }
     Ok(())
 }
 
@@ -1401,6 +1479,7 @@ pub async fn huya_raid_turn_callback(
     query: CallbackQuery,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    let callback_started = Instant::now();
     let data = query.data.as_deref().unwrap_or("");
     let parts: Vec<&str> = data.splitn(3, ':').collect();
     if parts.len() < 3 {
@@ -1418,19 +1497,29 @@ pub async fn huya_raid_turn_callback(
     };
     let clicker = query.from.id.0 as i64;
 
+    let db_started = Instant::now();
     let Some(current_actor) = huya_db::raid_current_actor(&pool, raid_id).await? else {
         let _ = bot.answer_callback_query(query.id).text("Рейд не активен").await;
         return Ok(());
     };
+    let current_actor_ms = db_started.elapsed().as_millis();
+    if current_actor_ms >= 150 {
+        tracing::debug!("huya_raid_turn:raid_current_actor slow ms={}", current_actor_ms);
+    }
     if current_actor != clicker {
         let _ = bot.answer_callback_query(query.id).text(LOCALE.t("ru", "huya.raid_not_your_turn")).await;
         return Ok(());
     }
 
+    let db_started = Instant::now();
     let Some(result) = huya_db::raid_take_turn(&pool, raid_id, clicker, action).await? else {
         let _ = bot.answer_callback_query(query.id).text("Ход не применился").await;
         return Ok(());
     };
+    let take_turn_ms = db_started.elapsed().as_millis();
+    if take_turn_ms >= 150 {
+        tracing::debug!("huya_raid_turn:raid_take_turn slow ms={}", take_turn_ms);
+    }
     let _ = bot.answer_callback_query(query.id).text("Ход принят").await;
 
     let mut steal_cm = None;
@@ -1464,6 +1553,15 @@ pub async fn huya_raid_turn_callback(
                 .reply_markup(raid_turn_keyboard(raid_id, &next_side))
                 .await;
         }
+    }
+    let elapsed = callback_started.elapsed();
+    if elapsed.as_millis() >= 500 {
+        tracing::info!(
+            "slow huya raid callback: raid_id={} tg_id={} elapsed_ms={}",
+            raid_id,
+            clicker,
+            elapsed.as_millis()
+        );
     }
     Ok(())
 }
@@ -1718,19 +1816,22 @@ async fn handle_pet_friend(
                 ],
             );
 
-            bot.send_message(chat_id, format!("🖐 {}", stage1))
+            let sent1 = bot.send_message(chat_id, format!("🖐 {}", stage1))
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
+            schedule_flood_delete(&bot, chat_id, sent1.id);
             tokio::time::sleep(Duration::from_secs(2)).await;
 
-            bot.send_message(chat_id, stage2)
+            let sent2 = bot.send_message(chat_id, stage2)
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
+            schedule_flood_delete(&bot, chat_id, sent2.id);
             tokio::time::sleep(Duration::from_secs(2)).await;
 
-            bot.send_message(chat_id, text)
+            let sent3 = bot.send_message(chat_id, text)
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
+            schedule_flood_delete(&bot, chat_id, sent3.id);
         }
     }
 
@@ -3517,14 +3618,17 @@ pub async fn huyainv_handler(
     _: crate::handlers::commands::Cmd,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    let started_at = Instant::now();
     if !msg.chat.is_group() && !msg.chat.is_supergroup() {
         return Ok(());
     }
     let from = match msg.from.as_ref() { Some(f) => f, None => return Ok(()) };
     let tg_id = from.id.0 as i64;
     let (h, _) = huya_db::get_or_create(&pool, msg.chat.id.0, tg_id).await?;
-    let equ = huya_db::get_equipment(&pool, msg.chat.id.0, tg_id).await?;
-    let items = huya_db::get_inventory(&pool, msg.chat.id.0, tg_id).await?;
+    let (equ, items) = tokio::try_join!(
+        huya_db::get_equipment(&pool, msg.chat.id.0, tg_id),
+        huya_db::get_inventory(&pool, msg.chat.id.0, tg_id)
+    )?;
     let text = v2_overview_summary_text(&h, &equ, &items);
     let mut req = bot.send_message(msg.chat.id, text)
         .parse_mode(teloxide::types::ParseMode::Html)
@@ -3533,6 +3637,15 @@ pub async fn huyainv_handler(
         req = req.message_thread_id(thread);
     }
     req.await?;
+    let elapsed = started_at.elapsed();
+    if elapsed.as_millis() >= 500 {
+        tracing::info!(
+            "slow huya inventory command: chat_id={} tg_id={} elapsed_ms={}",
+            msg.chat.id.0,
+            tg_id,
+            elapsed.as_millis()
+        );
+    }
     Ok(())
 }
 
@@ -3541,6 +3654,7 @@ pub async fn huya_inventory_callback(
     query: CallbackQuery,
     pool: PgPool,
 ) -> Result<(), AppError> {
+    let callback_started = Instant::now();
     let data = query.data.as_deref().unwrap_or("");
     let qid = query.id.clone();
     let clicker = query.from.id.0 as i64;
@@ -3816,10 +3930,23 @@ pub async fn huya_inventory_callback(
     }
     let screen_to_render = screen_to_render.unwrap_or(InvScreen::Overview);
 
+    let db_started = Instant::now();
     let (h, _) = huya_db::get_or_create(&pool, chat_id_raw, clicker).await?;
-    let equ = huya_db::get_equipment(&pool, chat_id_raw, clicker).await?;
-    let items = huya_db::get_inventory(&pool, chat_id_raw, clicker).await?;
-    let gems = huya_db::all_socketed_gems_for_player(&pool, chat_id_raw, clicker).await?;
+    let (equ, items, gems) = tokio::try_join!(
+        huya_db::get_equipment(&pool, chat_id_raw, clicker),
+        huya_db::get_inventory(&pool, chat_id_raw, clicker),
+        huya_db::all_socketed_gems_for_player(&pool, chat_id_raw, clicker)
+    )?;
+    let snapshot_ms = db_started.elapsed().as_millis();
+    if snapshot_ms >= 150 {
+        tracing::debug!(
+            "huya_inventory_callback:snapshot slow ms={} chat_id={} tg_id={} items={}",
+            snapshot_ms,
+            chat_id_raw,
+            clicker,
+            items.len()
+        );
+    }
 
     let (text, keyboard) = match &screen_to_render {
         InvScreen::Overview => (
@@ -3866,11 +3993,41 @@ pub async fn huya_inventory_callback(
         .parse_mode(teloxide::types::ParseMode::Html)
         .reply_markup(keyboard)
         .await;
+    let elapsed = callback_started.elapsed();
+    if elapsed.as_millis() >= 500 {
+        tracing::info!(
+            "slow huya inventory callback: data_prefix='{}' chat_id={} tg_id={} elapsed_ms={}",
+            data.split(':').next().unwrap_or(data),
+            chat_id_raw,
+            clicker,
+            elapsed.as_millis()
+        );
+    }
     Ok(())
 }
 
 fn current_datetime_kyiv() -> DateTime<chrono_tz::Tz> {
     Utc::now().with_timezone(&Kyiv)
+}
+
+async fn dutch_helm_notifications_enabled(pool: &PgPool, chat_id: i64) -> Result<bool, AppError> {
+    let enabled = kv::get(pool, chat_id, DUTCH_HELM_NOTIFY_KEY)
+        .await?
+        .map(|item| item.value != "0")
+        .unwrap_or(true);
+    Ok(enabled)
+}
+
+async fn mark_dutch_helm_stage_once(event_id: i32, chat_id: i64, stage: &str) -> bool {
+    let key = format!("{event_id}:{chat_id}:{stage}");
+    let mut marks = DUTCH_HELM_STAGE_MARKS.write().await;
+    marks.insert(key)
+}
+
+async fn clear_dutch_helm_stage_marks_for_event(event_id: i32) {
+    let prefix = format!("{event_id}:");
+    let mut marks = DUTCH_HELM_STAGE_MARKS.write().await;
+    marks.retain(|k| !k.starts_with(&prefix));
 }
 
 fn random_daily_start_utc(now_kyiv: DateTime<chrono_tz::Tz>) -> DateTime<Utc> {
@@ -3909,10 +4066,6 @@ async fn dutch_helm_tick(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
         let mut rng = rand::rng();
         rng.random_range(1..=999_999)
     };
-    if now_kyiv.hour() == 4 && now_kyiv.minute() <= 1 {
-        let _ = huya_db::cleanup_old_dutch_helm_events(pool, 30).await;
-    }
-
     let event = if let Some(existing) = huya_db::get_dutch_helm_event_by_date(pool, event_date).await? {
         existing
     } else {
@@ -3930,6 +4083,9 @@ async fn dutch_helm_tick(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
         if let Some(activated) = huya_db::activate_dutch_helm_event(pool, event.id).await? {
             let games = game::list_games(pool).await?;
             for g in games {
+                if !dutch_helm_notifications_enabled(pool, g.chat_id).await? {
+                    continue;
+                }
                 let text = LOCALE.t_rand_fmt(
                     &g.lang,
                     "huya.dutch_helm_stage_start",
@@ -3939,30 +4095,56 @@ async fn dutch_helm_tick(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
                     LOCALE.t(&g.lang, "huya.dutch_helm_btn_join"),
                     format!("huya_dh_join:{}", activated.id),
                 )]]);
-                let _ = bot
+                if let Ok(sent) = bot
                     .send_message(ChatId(g.chat_id), text)
                     .parse_mode(teloxide::types::ParseMode::Html)
                     .reply_markup(keyboard)
-                    .await;
+                    .await
+                {
+                    schedule_flood_delete(bot, ChatId(g.chat_id), sent.id);
+                }
             }
         }
     }
 
     if let Some(active) = huya_db::get_active_dutch_helm_event(pool, now_utc).await? {
-        let half_mark = active.start_at + (active.join_deadline_at - active.start_at) / 2;
-        if now_utc >= half_mark && now_utc < (half_mark + ChronoDuration::seconds(20)) {
-            let games = game::list_games(pool).await?;
-            for g in games {
-                let count = huya_db::get_dutch_helm_chat_participants_count(pool, active.id, g.chat_id).await?;
-                let text = LOCALE.t_rand_fmt(
-                    &g.lang,
-                    "huya.dutch_helm_stage_mid",
-                    &[("count", &count.to_string())],
-                );
-                let _ = bot
-                    .send_message(ChatId(g.chat_id), text)
-                    .parse_mode(teloxide::types::ParseMode::Html)
-                    .await;
+        let elapsed_secs = (now_utc - active.start_at).num_seconds().max(0);
+        let secs_left = (active.join_deadline_at - now_utc).num_seconds().max(0);
+        let games = game::list_games(pool).await?;
+        for g in games {
+            if !dutch_helm_notifications_enabled(pool, g.chat_id).await? {
+                continue;
+            }
+            let count = huya_db::get_dutch_helm_chat_participants_count(pool, active.id, g.chat_id).await?;
+            let stage_key = if elapsed_secs >= 105 {
+                Some(("lastcall", "huya.dutch_helm_stage_lastcall"))
+            } else if elapsed_secs >= 75 {
+                Some(("pulse2", "huya.dutch_helm_stage_pulse2"))
+            } else if elapsed_secs >= 30 {
+                Some(("pulse1", "huya.dutch_helm_stage_pulse1"))
+            } else {
+                None
+            };
+            let Some((stage_mark, locale_key)) = stage_key else {
+                continue;
+            };
+            if !mark_dutch_helm_stage_once(active.id, g.chat_id, stage_mark).await {
+                continue;
+            }
+            let text = LOCALE.t_rand_fmt(
+                &g.lang,
+                locale_key,
+                &[
+                    ("count", &count.to_string()),
+                    ("seconds_left", &secs_left.to_string()),
+                ],
+            );
+            if let Ok(sent) = bot
+                .send_message(ChatId(g.chat_id), text)
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await
+            {
+                schedule_flood_delete(bot, ChatId(g.chat_id), sent.id);
             }
         }
     }
@@ -3973,6 +4155,9 @@ async fn dutch_helm_tick(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
     {
         let summaries = huya_db::finalize_dutch_helm_event(pool, latest.id).await?;
         for summary in summaries {
+            if !dutch_helm_notifications_enabled(pool, summary.chat_id).await? {
+                continue;
+            }
             let g = game::get_or_create_game(pool, summary.chat_id).await?;
             let text = LOCALE.t_fmt(
                 &g.lang,
@@ -3982,13 +4167,164 @@ async fn dutch_helm_tick(bot: &Bot, pool: &PgPool) -> Result<(), AppError> {
                     ("reward_cm", &mm_to_cm_str(summary.reward_mm)),
                 ],
             );
-            let _ = bot
+            if let Ok(sent) = bot
                 .send_message(ChatId(summary.chat_id), text)
                 .parse_mode(teloxide::types::ParseMode::Html)
-                .await;
+                .await
+            {
+                schedule_flood_delete(bot, ChatId(summary.chat_id), sent.id);
+            }
         }
+        clear_dutch_helm_stage_marks_for_event(latest.id).await;
     }
 
+    Ok(())
+}
+
+async fn handle_local_dutch_helm_start(
+    bot: &Bot,
+    pool: &PgPool,
+    msg: &Message,
+    initiator_tg_id: i64,
+) -> Result<(), AppError> {
+    let owner_tg_id = if let Ok(raw) = std::env::var("HELM_OWNER_TG_ID") {
+        raw.parse::<i64>().ok()
+    } else {
+        kv::get(pool, 0, "watchdog_alerts_recipient_tg_id")
+            .await?
+            .and_then(|item| item.value.parse::<i64>().ok())
+    };
+    let Some(owner_tg_id) = owner_tg_id else {
+        bot.send_message(
+            msg.chat.id,
+            "Локальный штурвал выключен: не настроен владелец (HELM_OWNER_TG_ID).",
+        )
+        .await?;
+        return Ok(());
+    };
+    if initiator_tg_id != owner_tg_id {
+        bot.send_message(msg.chat.id, "Эту команду может запускать только владелец бота.")
+            .await?;
+        return Ok(());
+    }
+
+    let chat_id = msg.chat.id.0;
+
+    let now = Utc::now();
+    let deadline_at = now + ChronoDuration::seconds(LOCAL_DUTCH_HELM_JOIN_SECS);
+    {
+        let mut state = LOCAL_DUTCH_HELM_STATE.write().await;
+        if let Some(active) = state.get(&chat_id)
+            && active.deadline_at > now
+        {
+            let seconds_left = (active.deadline_at - now).num_seconds().max(1);
+            bot.send_message(
+                msg.chat.id,
+                format!("Локальный штурвал уже активен. Осталось {} сек.", seconds_left),
+            )
+            .await?;
+            return Ok(());
+        }
+        state.insert(
+            chat_id,
+            LocalDutchHelmState {
+                deadline_at,
+                participants: HashSet::new(),
+            },
+        );
+    }
+
+    let game = game::get_or_create_game(pool, chat_id).await?;
+    let text = LOCALE.t_rand_fmt(
+        &game.lang,
+        "huya.dutch_helm_stage_start",
+        &[("minutes", "2")],
+    );
+    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        LOCALE.t(&game.lang, "huya.dutch_helm_btn_join"),
+        format!("huya_dh_local_join:{chat_id}"),
+    )]]);
+    let start_sent = bot.send_message(msg.chat.id, text)
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .reply_markup(keyboard)
+        .await?;
+    schedule_flood_delete(bot, msg.chat.id, start_sent.id);
+
+    let bot_clone = bot.clone();
+    let pool_clone = pool.clone();
+    tokio::spawn(async move {
+        let wait = (deadline_at - Utc::now()).to_std().unwrap_or_else(|_| Duration::from_secs(0));
+        tokio::time::sleep(wait).await;
+        let _ = finalize_local_dutch_helm(&bot_clone, &pool_clone, chat_id, deadline_at).await;
+    });
+    Ok(())
+}
+
+async fn finalize_local_dutch_helm(
+    bot: &Bot,
+    pool: &PgPool,
+    chat_id: i64,
+    expected_deadline: DateTime<Utc>,
+) -> Result<(), AppError> {
+    let participants: Vec<i64> = {
+        let mut state = LOCAL_DUTCH_HELM_STATE.write().await;
+        let Some(active) = state.get(&chat_id) else {
+            return Ok(());
+        };
+        if active.deadline_at != expected_deadline {
+            return Ok(());
+        }
+        let out = active.participants.iter().copied().collect::<Vec<_>>();
+        state.remove(&chat_id);
+        out
+    };
+
+    let participants_count = participants.len() as i32;
+
+    let base = 4 + participants_count.max(1);
+    let max_extra = 2 + participants_count.max(1);
+
+    let mut total_reward_mm: i64 = 0;
+    for tg_id in &participants {
+        let roll: i32 = {
+            let mut rng = rand::rng();
+            rng.random_range(0..=max_extra.max(0))
+        };
+        let reward_mm = (base + roll).clamp(6, 80);
+
+        sqlx::query(
+            "UPDATE huya
+             SET length_mm = CASE WHEN length_mm < 0 THEN length_mm - $1 ELSE length_mm + $1 END
+             WHERE chat_id = $2 AND tg_id = $3",
+        )
+        .bind(reward_mm)
+        .bind(chat_id)
+        .bind(tg_id)
+        .execute(pool)
+        .await?;
+
+        total_reward_mm += reward_mm as i64;
+    }
+
+    let avg_reward_mm = if participants_count > 0 {
+        (total_reward_mm / participants_count as i64).max(0) as i32
+    } else {
+        0
+    };
+
+    let game = game::get_or_create_game(pool, chat_id).await?;
+    let text = LOCALE.t_fmt(
+        &game.lang,
+        "huya.dutch_helm_final",
+        &[
+            ("count", &participants_count.to_string()),
+            ("reward_cm", &mm_to_cm_str(avg_reward_mm)),
+        ],
+    );
+    let final_sent = bot.send_message(ChatId(chat_id), text)
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .await?;
+    schedule_flood_delete(bot, ChatId(chat_id), final_sent.id);
     Ok(())
 }
 
@@ -4001,6 +4337,50 @@ pub async fn huya_dutch_helm_join_callback(
         let _ = bot.answer_callback_query(query.id).await;
         return Ok(());
     };
+    if let Some(chat_id_raw) = data
+        .strip_prefix("huya_dh_local_join:")
+        .and_then(|x| x.parse::<i64>().ok())
+    {
+        let Some(msg) = query.message.as_ref() else {
+            let _ = bot.answer_callback_query(query.id).await;
+            return Ok(());
+        };
+        if msg.chat().id.0 != chat_id_raw {
+            let _ = bot.answer_callback_query(query.id).text("Неверный чат для участия.").await;
+            return Ok(());
+        }
+        let tg_id = query.from.id.0 as i64;
+        let now = Utc::now();
+        let game = game::get_or_create_game(&pool, chat_id_raw).await?;
+        let join_result_count = {
+            let mut state = LOCAL_DUTCH_HELM_STATE.write().await;
+            if let Some(active) = state.get_mut(&chat_id_raw) {
+                if active.deadline_at <= now {
+                    None
+                } else {
+                    active.participants.insert(tg_id);
+                    Some(active.participants.len() as i64)
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(count) = join_result_count {
+            let text = LOCALE.t_fmt(
+                &game.lang,
+                "huya.dutch_helm_join_ok",
+                &[("count", &count.to_string())],
+            );
+            let _ = bot.answer_callback_query(query.id).text(text).await;
+        } else {
+            let _ = bot
+                .answer_callback_query(query.id)
+                .text(LOCALE.t(&game.lang, "huya.dutch_helm_join_fail"))
+                .await;
+        }
+        return Ok(());
+    }
+
     let mut parts = data.split(':');
     let _prefix = parts.next();
     let event_id = parts

@@ -5,6 +5,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use tokio::sync::RwLock;
+use tokio::time::{sleep, Duration};
 
 use crate::error::AppError;
 
@@ -44,6 +48,20 @@ pub struct RpgUiState {
     pub mode: String,
     pub submode: Option<String>,
     pub payload_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+struct InMemoryUiState {
+    state: RpgUiState,
+    updated_at: DateTime<Utc>,
+}
+
+const RPG_UI_STATE_TTL_HOURS: i64 = 24;
+static RPG_UI_STATE_STORE: LazyLock<RwLock<HashMap<(i32, i64), InMemoryUiState>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn ui_state_not_expired(updated_at: DateTime<Utc>) -> bool {
+    updated_at > Utc::now() - chrono::Duration::hours(RPG_UI_STATE_TTL_HOURS)
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -263,25 +281,22 @@ pub async fn get_or_create_player(pool: &PgPool, user_id: i32) -> Result<RpgPlay
 
 /// Get latest UI state for user in given chat, if any.
 pub async fn get_ui_state(
-    pool: &PgPool,
+    _pool: &PgPool,
     user_id: i32,
     chat_id: i64,
 ) -> Result<Option<RpgUiState>, AppError> {
-    let state = sqlx::query_as::<_, RpgUiState>(
-        r#"
-        SELECT id, user_id, chat_id, message_id, mode, submode, payload_json
-        FROM rpg_ui_state
-        WHERE user_id = $1 AND chat_id = $2
-        ORDER BY updated_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(user_id)
-    .bind(chat_id)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(state)
+    let key = (user_id, chat_id);
+    {
+        let store = RPG_UI_STATE_STORE.read().await;
+        if let Some(entry) = store.get(&key)
+            && ui_state_not_expired(entry.updated_at)
+        {
+            return Ok(Some(entry.state.clone()));
+        }
+    }
+    let mut store = RPG_UI_STATE_STORE.write().await;
+    store.remove(&key);
+    Ok(None)
 }
 
 /// Upsert UI state after we created/updated the RPG menu message.
@@ -308,7 +323,7 @@ pub async fn upsert_ui_state(
 /// Upsert UI state with payload JSON.
 /// Note: Always inserts new row; get_ui_state uses ORDER BY updated_at DESC LIMIT 1 to get latest.
 pub async fn upsert_ui_state_with_payload(
-    pool: &PgPool,
+    _pool: &PgPool,
     user_id: i32,
     chat_id: i64,
     message_id: i64,
@@ -316,21 +331,23 @@ pub async fn upsert_ui_state_with_payload(
     submode: Option<&str>,
     payload: serde_json::Value,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        INSERT INTO rpg_ui_state (user_id, chat_id, message_id, mode, submode, payload_json, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW())
-        "#,
-    )
-    .bind(user_id)
-    .bind(chat_id)
-    .bind(message_id)
-    .bind(mode)
-    .bind(submode)
-    .bind(payload)
-    .execute(pool)
-    .await?;
-
+    let mut store = RPG_UI_STATE_STORE.write().await;
+    store.retain(|_, v| ui_state_not_expired(v.updated_at));
+    store.insert(
+        (user_id, chat_id),
+        InMemoryUiState {
+            state: RpgUiState {
+                id: 0,
+                user_id,
+                chat_id,
+                message_id,
+                mode: mode.to_string(),
+                submode: submode.map(|s| s.to_string()),
+                payload_json: payload,
+            },
+            updated_at: Utc::now(),
+        },
+    );
     Ok(())
 }
 
@@ -582,6 +599,34 @@ pub async fn update_battle_state(
     .await?;
 
     Ok(())
+}
+
+pub async fn cleanup_old_rpg_battles(pool: &PgPool) -> Result<u64, AppError> {
+    const BATCH_SIZE: i64 = 5_000;
+    let mut total_deleted = 0_u64;
+    loop {
+        let deleted = sqlx::query(
+            "WITH doomed AS (
+                SELECT ctid
+                FROM rpg_battle
+                WHERE status IN ('finished', 'timeout')
+                  AND updated_at < NOW() - INTERVAL '14 days'
+                LIMIT $1
+            )
+            DELETE FROM rpg_battle
+            WHERE ctid IN (SELECT ctid FROM doomed)",
+        )
+        .bind(BATCH_SIZE)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        total_deleted += deleted;
+        if deleted < BATCH_SIZE as u64 {
+            break;
+        }
+        sleep(Duration::from_millis(120)).await;
+    }
+    Ok(total_deleted)
 }
 
 /// Tests for RPG character (player) creation.

@@ -347,6 +347,7 @@ fn menu_admin_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![InlineKeyboardButton::callback("🔧 Настройки автопидора", "menu:action:pidorset")],
         vec![InlineKeyboardButton::callback("📢 Позвать участников", "menu:action:pidorcall")],
+        vec![InlineKeyboardButton::callback("⚓ Уведомления штурвала", "menu:action:helm_notify_toggle")],
         vec![InlineKeyboardButton::callback("🧵 Топики бота", "menu:action:topics")],
         vec![InlineKeyboardButton::callback("🌐 Язык чата (/lang ru)", "menu:action:lang_info")],
         vec![InlineKeyboardButton::callback("← Назад", "menu:main")],
@@ -607,6 +608,36 @@ pub async fn menu_callback(
                         .await?;
                 } else {
                     game_commands::send_pidorcall_message(&bot, &pool, chat_id).await?;
+                }
+            }
+            "helm_notify_toggle" => {
+                let user_id = query.from.id.0 as u64;
+                if chat_id.0 >= 0 {
+                    bot.send_message(chat_id, LOCALE.t("ru", "menu.group_only"))
+                        .await?;
+                } else if !game_commands::is_chat_admin(&bot, chat_id, user_id).await {
+                    bot.send_message(chat_id, LOCALE.t("ru", "menu.admin_only"))
+                        .await?;
+                } else {
+                    let key = "huya_dutch_helm_notify";
+                    let current_enabled = kv::get(&pool, chat_id.0, key)
+                        .await?
+                        .map(|v| v.value != "0")
+                        .unwrap_or(true);
+                    let new_enabled = !current_enabled;
+                    kv::set(
+                        &pool,
+                        chat_id.0,
+                        key,
+                        if new_enabled { "1" } else { "0" },
+                    )
+                    .await?;
+                    let text = if new_enabled {
+                        "Уведомления штурвала включены."
+                    } else {
+                        "Уведомления штурвала выключены."
+                    };
+                    bot.send_message(chat_id, text).await?;
                 }
             }
             "topics" => {

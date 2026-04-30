@@ -1,6 +1,7 @@
 //! Game, GamePlayer, GameResult: get or create game, register, run draw, stats.
 
 use sqlx::PgPool;
+use tokio::time::{sleep, Duration};
 
 use crate::db::models::{Game, GameResult, TgUser, UserWithCount};
 use crate::error::AppError;
@@ -277,6 +278,33 @@ pub async fn get_unregistered_in_chat(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+pub async fn cleanup_old_chat_members(pool: &PgPool) -> Result<u64, AppError> {
+    const BATCH_SIZE: i64 = 5_000;
+    let mut total_deleted = 0_u64;
+    loop {
+        let deleted = sqlx::query(
+            "WITH doomed AS (
+                SELECT ctid
+                FROM chat_member
+                WHERE last_seen_at < NOW() - INTERVAL '180 days'
+                LIMIT $1
+            )
+            DELETE FROM chat_member
+            WHERE ctid IN (SELECT ctid FROM doomed)",
+        )
+        .bind(BATCH_SIZE)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        total_deleted += deleted;
+        if deleted < BATCH_SIZE as u64 {
+            break;
+        }
+        sleep(Duration::from_millis(120)).await;
+    }
+    Ok(total_deleted)
 }
 
 pub async fn get_user_by_id(pool: &PgPool, user_id: i32) -> Result<Option<TgUser>, AppError> {

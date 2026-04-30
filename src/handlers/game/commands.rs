@@ -66,13 +66,17 @@ async fn send_text_to_target(
     bot: &Bot,
     chat_id: ChatId,
     thread_id: Option<ThreadId>,
+    auto_delete: bool,
     text: impl Into<String>,
 ) -> Result<(), AppError> {
     let mut request = bot.send_message(chat_id, text.into());
     if let Some(thread) = thread_id {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    if auto_delete {
+        schedule_delete_message(bot.clone(), chat_id, sent.id);
+    }
     Ok(())
 }
 
@@ -80,23 +84,27 @@ async fn send_html_to_target(
     bot: &Bot,
     chat_id: ChatId,
     thread_id: Option<ThreadId>,
+    auto_delete: bool,
     text: impl Into<String>,
 ) -> Result<(), AppError> {
     let mut request = bot.send_message(chat_id, text.into()).parse_mode(ParseMode::Html);
     if let Some(thread) = thread_id {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    if auto_delete {
+        schedule_delete_message(bot.clone(), chat_id, sent.id);
+    }
     Ok(())
 }
 
-/// Menu/rules message auto-delete: 30 sec from last user interaction.
-const RULES_AND_MENU_DELETE_AFTER_SECS: u64 = 30;
+/// Auto-delete for player-triggered non-global game messages.
+const PLAYER_MESSAGE_DELETE_AFTER_SECS: u64 = 300;
 
-/// Schedules deletion of a message after RULES_AND_MENU_DELETE_AFTER_SECS. Fire-and-forget.
+/// Schedules deletion of a message after PLAYER_MESSAGE_DELETE_AFTER_SECS. Fire-and-forget.
 pub fn schedule_delete_message(bot: Bot, chat_id: ChatId, message_id: teloxide::types::MessageId) {
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(RULES_AND_MENU_DELETE_AFTER_SECS)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(PLAYER_MESSAGE_DELETE_AFTER_SECS)).await;
         let _ = bot.delete_message(chat_id, message_id).await;
     });
 }
@@ -477,6 +485,7 @@ async fn run_pidor_game(
                 bot,
                 chat_id,
                 background_thread_id,
+                is_manual,
                 LOCALE.t(lang, "pidor.errors.not_enough_players"),
             )
             .await?;
@@ -497,7 +506,7 @@ async fn run_pidor_game(
             let text = LOCALE.t_fmt(lang, "pidor.static.current_result", &[
                 ("username", &escape_html(&winner.full_username(false))),
             ]);
-            send_html_to_target(bot, chat_id, background_thread_id, text).await?;
+            send_html_to_target(bot, chat_id, background_thread_id, is_manual, text).await?;
         }
         return Ok(());
     }
@@ -514,7 +523,7 @@ async fn run_pidor_game(
 
     if last_day && is_manual {
         let announcement = LOCALE.t_fmt(lang, "pidor.static.year_announcement", &[("year", &cur_year.to_string())]);
-        send_html_to_target(bot, chat_id, background_thread_id, announcement).await?;
+        send_html_to_target(bot, chat_id, background_thread_id, is_manual, announcement).await?;
     }
     
     if !is_manual {
@@ -524,16 +533,16 @@ async fn run_pidor_game(
             PidorRunKind::Autorun(PidorAutorunSlot::Day) => "pidor.static.sudden_day",
             PidorRunKind::Autorun(PidorAutorunSlot::Evening) => "pidor.static.sudden_evening",
         };
-        send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t(lang, key)).await?;
+        send_text_to_target(bot, chat_id, background_thread_id, is_manual, LOCALE.t(lang, key)).await?;
     }
     
-    send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t_rand(lang, "pidor.stage1")).await?;
+    send_text_to_target(bot, chat_id, background_thread_id, is_manual, LOCALE.t_rand(lang, "pidor.stage1")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
-    send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t_rand(lang, "pidor.stage2")).await?;
+    send_text_to_target(bot, chat_id, background_thread_id, is_manual, LOCALE.t_rand(lang, "pidor.stage2")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
-    send_text_to_target(bot, chat_id, background_thread_id, LOCALE.t_rand(lang, "pidor.stage3")).await?;
+    send_text_to_target(bot, chat_id, background_thread_id, is_manual, LOCALE.t_rand(lang, "pidor.stage3")).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(GAME_RESULT_TIME_DELAY_SECS)).await;
     
     let mut stage4_text = LOCALE.t_rand_fmt(lang, "pidor.stage4", &[
@@ -550,7 +559,7 @@ async fn run_pidor_game(
         stage4_text = stage4_text.replace("пидором дня", &format!("пидором {}", slot_name));
         stage4_text = stage4_text.replace("пидор дня", &format!("пидор {}", slot_name));
     }
-    send_html_to_target(bot, chat_id, background_thread_id, stage4_text).await?;
+    send_html_to_target(bot, chat_id, background_thread_id, is_manual, stage4_text).await?;
 
     // Achievements only for "Pidor of the Day" (manual run).
     if is_manual {
@@ -560,6 +569,7 @@ async fn run_pidor_game(
                     bot,
                     chat_id,
                     background_thread_id,
+                    is_manual,
                     LOCALE.t(lang, "achievements.notifications.first_pidor_win"),
                 )
                 .await?;
@@ -569,6 +579,7 @@ async fn run_pidor_game(
                     bot,
                     chat_id,
                     background_thread_id,
+                    is_manual,
                     LOCALE.t(lang, "achievements.notifications.three_wins"),
                 )
                 .await?;
@@ -586,6 +597,7 @@ async fn run_pidor_game(
                 bot,
                 chat_id,
                 background_thread_id,
+                is_manual,
                 LOCALE.t(lang, "achievements.notifications.series_2"),
             )
             .await?;
@@ -596,6 +608,7 @@ async fn run_pidor_game(
                 bot,
                 chat_id,
                 background_thread_id,
+                is_manual,
                 LOCALE.t(lang, "achievements.notifications.night_pidor"),
             )
             .await?;
@@ -619,7 +632,7 @@ async fn run_pidor_game(
             LOCALE.t(lang, "bet.winners_suffix_one")
         };
         let text = LOCALE.t_fmt(lang, "bet.winners", &[("suffix", suffix), ("names", &joined)]);
-        send_html_to_target(bot, chat_id, background_thread_id, text).await?;
+        send_html_to_target(bot, chat_id, background_thread_id, is_manual, text).await?;
 
         for bet in &correct_bets {
             // Award pidor_elo for correct bet.
@@ -632,6 +645,7 @@ async fn run_pidor_game(
                         bot,
                         chat_id,
                         background_thread_id,
+                        is_manual,
                         LOCALE.t(lang, "achievements.notifications.bet_correct_1"),
                     )
                     .await?;
@@ -641,6 +655,7 @@ async fn run_pidor_game(
                         bot,
                         chat_id,
                         background_thread_id,
+                        is_manual,
                         LOCALE.t(lang, "achievements.notifications.bet_correct_3"),
                     )
                     .await?;
@@ -650,6 +665,7 @@ async fn run_pidor_game(
                         bot,
                         chat_id,
                         background_thread_id,
+                        is_manual,
                         LOCALE.t(lang, "achievements.notifications.bet_self_correct"),
                     )
                     .await?;
@@ -660,6 +676,7 @@ async fn run_pidor_game(
                         bot,
                         chat_id,
                         background_thread_id,
+                        is_manual,
                         LOCALE.t(lang, "achievements.notifications.bet_streak_3"),
                     )
                     .await?;

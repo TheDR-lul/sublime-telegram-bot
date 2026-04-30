@@ -1,6 +1,7 @@
 //! Entry: clap dispatch to run / config / migrate / commands.
 
 use clap::Parser;
+use chrono::Timelike;
 use sublime::alerts;
 use sublime::db::kv;
 use sublime::{cli::*, config::Config, error::AppError};
@@ -144,6 +145,50 @@ async fn run_bot(config_path: Option<std::path::PathBuf>) -> Result<(), AppError
         let event_shutdown = shutdown_token.clone();
         tokio::spawn(async move {
             sublime::handlers::huya::run_dutch_helm_scheduler(bot_clone, pool_clone, event_shutdown).await;
+        });
+    }
+    // Periodic retention cleanup for high-growth tables.
+    {
+        let pool_clone = pool.clone();
+        let cleanup_shutdown = shutdown_token.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            let mut last_cleanup_date: Option<chrono::NaiveDate> = None;
+            loop {
+                tokio::select! {
+                    _ = cleanup_shutdown.cancelled() => break,
+                    _ = interval.tick() => {
+                        let kyiv_now = chrono::Utc::now().with_timezone(&chrono_tz::Europe::Kyiv);
+                        let in_cleanup_window = kyiv_now.hour() == 4 && (20..=29).contains(&kyiv_now.minute());
+                        if !in_cleanup_window || last_cleanup_date == Some(kyiv_now.date_naive()) {
+                            continue;
+                        }
+                        let run_started = std::time::Instant::now();
+                        let duel_deleted = sublime::db::duel::cleanup_old_duel_games(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let fight_deleted = sublime::db::huya::cleanup_old_huya_fights(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let raid_deleted = sublime::db::huya::cleanup_old_huya_raids(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let loot_deleted = sublime::db::huya::cleanup_old_huya_loot_logs(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let reforge_deleted = sublime::db::huya::cleanup_old_huya_reforge_logs(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let rpg_battle_deleted = sublime::db::rpg::cleanup_old_rpg_battles(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let chat_member_deleted = sublime::db::game::cleanup_old_chat_members(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let tiktok_deleted = sublime::db::tiktok::cleanup_old_cache(&pool_clone).await.unwrap_or(0);
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let dutch_helm_deleted = sublime::db::huya::cleanup_old_dutch_helm_events(&pool_clone, 30).await.unwrap_or(0);
+                        tracing::info!(
+                            "Retention cleanup: duel={} huya_fight={} huya_raid={} loot={} reforge={} rpg_battle={} chat_member={} tiktok={} dutch_helm={} elapsed_ms={}",
+                            duel_deleted, fight_deleted, raid_deleted, loot_deleted, reforge_deleted, rpg_battle_deleted, chat_member_deleted, tiktok_deleted, dutch_helm_deleted, run_started.elapsed().as_millis()
+                        );
+                        last_cleanup_date = Some(kyiv_now.date_naive());
+                    }
+                }
+            }
         });
     }
 

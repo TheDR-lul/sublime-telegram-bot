@@ -3,6 +3,7 @@
 use regex::Regex;
 use sqlx::PgPool;
 use std::sync::LazyLock;
+use std::time::Instant;
 use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
 use teloxide::dptree::case;
 use teloxide::prelude::*;
@@ -133,10 +134,12 @@ async fn callback_router(
     pool: PgPool,
     config: Config,
 ) -> Result<(), AppError> {
+    let started_at = Instant::now();
     if let Some(msg) = query.message.as_ref() {
         crate::alerts::set_last_reward_context(msg.chat().id.0, query.from.id.0 as i64);
     }
-    let data = query.data.as_deref().unwrap_or("");
+    let data = query.data.clone().unwrap_or_default();
+    let data_prefix = data.split(':').next().unwrap_or("").to_string();
     // RPG: development for future — disabled; reply instead of opening menu
     if data.starts_with("rpg:") {
         return misc::rpg_disabled_callback(bot, query).await;
@@ -219,11 +222,12 @@ async fn callback_router(
     {
         return huya_handler::huya_chest_callback(bot, query, pool).await;
     }
-    if data.starts_with("huya_dh_join:") {
+    if data.starts_with("huya_dh_join:") || data.starts_with("huya_dh_local_join:") {
         return huya_handler::huya_dutch_helm_join_callback(bot, query, pool).await;
     }
     if data.starts_with("huya_inv_s:")
         || data.starts_with("huya_inv_equip:")
+        || data.starts_with("huya_inv_auto:")
         || data.starts_with("huya_inv_unequip:") || data.starts_with("huya_inv_sell:")
         || data.starts_with("huya_inv_use:")
         || data.starts_with("huya_inv_socket_pick:") || data.starts_with("huya_inv_socket_do:")
@@ -232,13 +236,22 @@ async fn callback_router(
     {
         return huya_handler::huya_inventory_callback(bot, query, pool).await;
     }
-    match data {
+    let result = match data.as_str() {
         "meme_en_refresh" => meme::meme_refresh_callback(bot, query).await,
         "meme_en_save" => meme::meme_save_callback(bot, query).await,
         "meme_ru_refresh" => meme::memeru_refresh_callback(bot, query, config).await,
         "meme_ru_save" => meme::memeru_save_callback(bot, query, config).await,
         _ => Ok(()),
+    };
+    let elapsed = started_at.elapsed();
+    if elapsed.as_millis() >= 500 {
+        tracing::info!(
+            "slow callback handler: data_prefix='{}' elapsed_ms={}",
+            data_prefix,
+            elapsed.as_millis()
+        );
     }
+    result
 }
 
 /// Message-only schema for tests. Uses a single endpoint that extracts Message from Update

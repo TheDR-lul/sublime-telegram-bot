@@ -11,6 +11,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use rand::RngExt;
 use sqlx::PgPool;
+use tokio::time::{sleep, Duration};
 
 use crate::db::kv;
 use crate::db::models::{
@@ -34,7 +35,58 @@ const HUYA_SELECT: &str =
 
 const XP_PER_LEVEL: i32 = 100;
 const LEVEL_UP_BONUS_MM: i32 = 50;
-const MAX_ROUNDS: i32 = 5;
+
+fn calc_level_progress(current_xp: i32, current_level: i32, gained_xp: i32) -> (i32, i32, i32) {
+    let gained_xp = gained_xp.max(0);
+    let total_xp = current_xp + gained_xp;
+    let level_ups = total_xp / XP_PER_LEVEL;
+    let new_xp = total_xp % XP_PER_LEVEL;
+    let new_level = current_level + level_ups;
+    (new_xp, new_level, level_ups)
+}
+
+async fn apply_xp_gain(pool: &PgPool, huya_id: i32, gained_xp: i32) -> Result<Huya, AppError> {
+    let current = sqlx::query_as::<_, Huya>(&format!(
+        "SELECT {HUYA_SELECT} FROM huya WHERE id = $1"
+    ))
+    .bind(huya_id)
+    .fetch_one(pool)
+    .await?;
+
+    let (new_xp, new_level, level_ups) = calc_level_progress(current.xp, current.level, gained_xp);
+    if level_ups == 0 {
+        return Ok(current);
+    }
+
+    let updated = sqlx::query_as::<_, Huya>(&format!(
+        "UPDATE huya
+         SET xp = $1,
+             level = $2,
+             skill_points = skill_points + $3
+         WHERE id = $4
+         RETURNING {HUYA_SELECT}"
+    ))
+    .bind(new_xp)
+    .bind(new_level)
+    .bind(level_ups)
+    .bind(huya_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(updated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calc_level_progress;
+
+    #[test]
+    fn level_progress_handles_overflow() {
+        let (xp, level, level_ups) = calc_level_progress(95, 3, 220);
+        assert_eq!(xp, 15);
+        assert_eq!(level, 6);
+        assert_eq!(level_ups, 3);
+    }
+}
 
 // Skill caps per tier.
 const CAP_T1: i32 = 20;
@@ -171,19 +223,10 @@ pub async fn grow(pool: &PgPool, huya: &Huya) -> Result<(Huya, i32, i32, bool, b
     let grow_mm = if boost_active { base_mm * 2 } else { base_mm };
 
     let new_length = huya.length_mm + grow_mm;
-    let new_xp_raw = huya.xp + xp_gain;
-    let mut new_level = huya.level;
-    let mut new_xp = new_xp_raw;
-    let mut leveled_up = false;
-
-    if new_xp >= XP_PER_LEVEL {
-        new_level += 1;
-        new_xp -= XP_PER_LEVEL;
-        leveled_up = true;
-    }
-
-    let final_length = if leveled_up { new_length + LEVEL_UP_BONUS_MM } else { new_length };
-    let sp_delta: i32 = if leveled_up { 1 } else { 0 };
+    let (new_xp, new_level, level_ups) = calc_level_progress(huya.xp, huya.level, xp_gain);
+    let leveled_up = level_ups > 0;
+    let final_length = new_length + LEVEL_UP_BONUS_MM * level_ups;
+    let sp_delta: i32 = level_ups;
 
     let updated = sqlx::query_as::<_, Huya>(
         &format!("UPDATE huya SET length_mm = $1, xp = $2, level = $3,
@@ -198,7 +241,7 @@ pub async fn grow(pool: &PgPool, huya: &Huya) -> Result<(Huya, i32, i32, bool, b
     .fetch_one(pool)
     .await?;
 
-    let total_grow = grow_mm + if leveled_up { LEVEL_UP_BONUS_MM } else { 0 };
+    let total_grow = grow_mm + LEVEL_UP_BONUS_MM * level_ups;
     Ok((updated, total_grow, xp_gain, leveled_up, boost_active))
 }
 
@@ -303,6 +346,7 @@ pub struct StealResult {
     pub success: bool,
     pub steal_mm: i32,
     pub backlash_mm: i32,
+    pub xp_gain: i32,
     pub chance_pct: u8,
     pub attacker: Huya,
     pub target: Huya,
@@ -352,6 +396,7 @@ pub async fn steal_attempt(
             success: false,
             steal_mm: 0,
             backlash_mm: 0,
+            xp_gain: 0,
             chance_pct,
             attacker: att_updated,
             target: tgt_updated,
@@ -427,13 +472,25 @@ pub async fn steal_attempt(
             .await;
     }
 
-    let (att_updated, _) = get_or_create(pool, chat_id, attacker_tg_id).await?;
+    let xp_gain = if success {
+        // Pickpocket grants bonus XP to the thief on successful steals.
+        // No XP is removed from the victim.
+        8 + att.skill_pickpocket.max(0) * 2
+    } else {
+        0
+    };
+    let att_updated = if xp_gain > 0 {
+        apply_xp_gain(pool, att.id, xp_gain).await?
+    } else {
+        get_or_create(pool, chat_id, attacker_tg_id).await?.0
+    };
     let (tgt_updated, _) = get_or_create(pool, chat_id, target_tg_id).await?;
 
     Ok(StealResult {
         success,
         steal_mm,
         backlash_mm,
+        xp_gain,
         chance_pct,
         attacker: att_updated,
         target: tgt_updated,
@@ -909,13 +966,33 @@ fn item_power_score(item: &HuyaInventoryItem) -> i32 {
         + item.socket_capacity.max(0) * 8
 }
 
+async fn get_equipment_candidates_for_autoequip(
+    pool: &PgPool,
+    tg_id: i64,
+) -> Result<Vec<HuyaInventoryItem>, AppError> {
+    let rows = sqlx::query_as::<_, HuyaInventoryItem>(
+        "SELECT id, chat_id, tg_id, item_id, rarity, item_kind, slot, trait AS trait_name,
+                roll, charges, sell_price_mm, booster_effect, booster_value, booster_scope,
+                socket_capacity, reforge_level, acquired_at
+         FROM huya_inventory
+         WHERE tg_id = $1 AND item_kind = 'equipment'
+         ORDER BY acquired_at DESC, id DESC",
+    )
+    .bind(tg_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn auto_equip_best(
     pool: &PgPool,
     chat_id: i64,
     tg_id: i64,
 ) -> Result<AutoEquipResult, AppError> {
+    let started_at = std::time::Instant::now();
     let (h, _) = get_or_create(pool, chat_id, tg_id).await?;
-    let items = get_inventory(pool, chat_id, tg_id).await?;
+    let items = get_equipment_candidates_for_autoequip(pool, tg_id).await?;
+    let candidate_count = items.len();
     let equipped = get_equipment(pool, chat_id, tg_id).await?;
 
     let mut best_by_slot: std::collections::HashMap<String, HuyaInventoryItem> =
@@ -968,6 +1045,16 @@ pub async fn auto_equip_best(
         changed_slots += 1;
     }
     tx.commit().await?;
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if elapsed_ms >= 200 {
+        tracing::debug!(
+            "auto_equip_best slow path: tg_id={} candidates={} changed_slots={} elapsed_ms={}",
+            tg_id,
+            candidate_count,
+            changed_slots,
+            elapsed_ms
+        );
+    }
 
     Ok(AutoEquipResult { changed_slots })
 }
@@ -1770,16 +1857,7 @@ pub async fn pet_friend(
         rng.random_range(5..=15)
     };
 
-    let updated_from_with_xp = sqlx::query_as::<_, Huya>(
-        &format!(
-            "UPDATE huya SET xp = xp + $1 \
-             WHERE id = $2 RETURNING {HUYA_SELECT}"
-        ),
-    )
-    .bind(xp_gain)
-    .bind(updated_from.id)
-    .fetch_one(pool)
-    .await?;
+    let updated_from_with_xp = apply_xp_gain(pool, updated_from.id, xp_gain).await?;
 
     register_pet_friend(pool, chat_id, from_tg_id, target_tg_id).await?;
 
@@ -2692,11 +2770,13 @@ pub async fn raid_apply_rewards(pool: &PgPool, raid: &HuyaRaid, winner_side: Opt
                 let share = ((steal_pool as f64) * (p.damage_done.max(0) as f64 / total_damage as f64)).round() as i32;
                 let gain = share.max(1);
                 distributed += gain;
-                sqlx::query("UPDATE huya SET length_mm = length_mm + $1, xp = xp + 15 WHERE tg_id = $2")
+                sqlx::query("UPDATE huya SET length_mm = length_mm + $1 WHERE tg_id = $2")
                     .bind(gain)
                     .bind(p.tg_id)
                     .execute(pool)
                     .await?;
+                let (party_huya, _) = get_or_create(pool, raid.chat_id, p.tg_id).await?;
+                let _ = apply_xp_gain(pool, party_huya.id, 15).await?;
             }
             sqlx::query("UPDATE huya SET length_mm = GREATEST(length_mm - $1, 10) WHERE tg_id = $2")
                 .bind(distributed.min(steal_pool))
@@ -2706,10 +2786,8 @@ pub async fn raid_apply_rewards(pool: &PgPool, raid: &HuyaRaid, winner_side: Opt
             Ok(distributed.min(steal_pool))
         }
         Some("target") => {
-            sqlx::query("UPDATE huya SET xp = xp + 40 WHERE tg_id = $1")
-                .bind(target_member.tg_id)
-                .execute(pool)
-                .await?;
+            let (target_huya, _) = get_or_create(pool, raid.chat_id, target_member.tg_id).await?;
+            let _ = apply_xp_gain(pool, target_huya.id, 40).await?;
             Ok(0)
         }
         _ => Ok(0),
@@ -2916,7 +2994,8 @@ pub async fn process_round(
         }
     }
 
-    let new_round = fight.round + 1; let fight_over = new_ch_hp == 0 || new_tg_hp == 0 || fight.round >= MAX_ROUNDS;
+    let new_round = fight.round + 1;
+    let fight_over = new_ch_hp == 0 || new_tg_hp == 0;
 
     let fight_winner_tg_id = if fight_over {
         if new_ch_hp > new_tg_hp {
@@ -3191,41 +3270,84 @@ pub async fn finalize_dutch_helm_event(
     .fetch_all(&mut *tx)
     .await?;
 
+    fn per_player_reward_mm(
+        base: i32,
+        max_extra: i32,
+        event_id: i32,
+        chat_id: i64,
+        tg_id: i64,
+    ) -> i32 {
+        let mut x = (event_id as i64)
+            .wrapping_mul(1103515245)
+            .wrapping_add(chat_id.wrapping_mul(12345))
+            ^ tg_id.wrapping_mul(1_000_003);
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let raw = (x & 0x7fff) as i32;
+        let extra = if max_extra > 0 {
+            raw % (max_extra + 1)
+        } else {
+            0
+        };
+        (base + extra).clamp(6, 80)
+    }
+
     let mut out = Vec::with_capacity(chat_rows.len());
     for (chat_id, participants) in chat_rows {
-        let crowd_bonus = (participants as i32).saturating_sub(1) * 2;
-        let reward_mm = (6 + crowd_bonus).clamp(6, 80);
-        sqlx::query(
-            "UPDATE huya
-             SET length_mm = CASE WHEN length_mm < 0 THEN length_mm - $1 ELSE length_mm + $1 END
-             WHERE chat_id = $2
-               AND tg_id IN (
-                   SELECT tg_id
-                   FROM huya_dutch_helm_participant
-                   WHERE event_id = $3 AND chat_id = $2
-               )",
+        let participants_i32 = (participants as i32).max(1);
+        let base = 4 + participants_i32;
+        let max_extra = 2 + participants_i32;
+        let mut total_reward_mm: i64 = 0;
+
+        let player_rows = sqlx::query_as::<_, (i64,)>(
+            "SELECT tg_id FROM huya_dutch_helm_participant
+             WHERE event_id = $1 AND chat_id = $2",
         )
-        .bind(reward_mm)
-        .bind(chat_id)
         .bind(event_id)
-        .execute(&mut *tx)
+        .bind(chat_id)
+        .fetch_all(&mut *tx)
         .await?;
 
-        sqlx::query(
-            "UPDATE huya_dutch_helm_participant
-             SET reward_mm = $1
-             WHERE event_id = $2 AND chat_id = $3",
-        )
-        .bind(reward_mm)
-        .bind(event_id)
-        .bind(chat_id)
-        .execute(&mut *tx)
-        .await?;
+        for (tg_id,) in player_rows {
+            let reward_mm = per_player_reward_mm(base, max_extra, event_id, chat_id, tg_id);
+
+            sqlx::query(
+                "UPDATE huya
+                 SET length_mm = CASE WHEN length_mm < 0 THEN length_mm - $1 ELSE length_mm + $1 END
+                 WHERE chat_id = $2 AND tg_id = $3",
+            )
+            .bind(reward_mm)
+            .bind(chat_id)
+            .bind(tg_id)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                "UPDATE huya_dutch_helm_participant
+                 SET reward_mm = $1
+                 WHERE event_id = $2 AND chat_id = $3 AND tg_id = $4",
+            )
+            .bind(reward_mm)
+            .bind(event_id)
+            .bind(chat_id)
+            .bind(tg_id)
+            .execute(&mut *tx)
+            .await?;
+
+            total_reward_mm += reward_mm as i64;
+        }
+
+        let avg_reward_mm = if participants > 0 {
+            (total_reward_mm / participants).max(0) as i32
+        } else {
+            0
+        };
 
         out.push(DutchHelmChatSummary {
             chat_id,
             participants,
-            reward_mm,
+            reward_mm: avg_reward_mm,
         });
     }
 
@@ -3254,4 +3376,114 @@ pub async fn cleanup_old_dutch_helm_events(
     .execute(pool)
     .await?;
     Ok(deleted.rows_affected())
+}
+
+pub async fn cleanup_old_huya_fights(pool: &PgPool) -> Result<u64, AppError> {
+    const BATCH_SIZE: i64 = 5_000;
+    let mut total_deleted = 0_u64;
+    loop {
+        let deleted = sqlx::query(
+            "WITH doomed AS (
+                SELECT ctid
+                FROM huya_fight
+                WHERE status = 'done'
+                  AND created_at < NOW() - INTERVAL '30 days'
+                LIMIT $1
+            )
+            DELETE FROM huya_fight
+            WHERE ctid IN (SELECT ctid FROM doomed)",
+        )
+        .bind(BATCH_SIZE)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        total_deleted += deleted;
+        if deleted < BATCH_SIZE as u64 {
+            break;
+        }
+        sleep(Duration::from_millis(120)).await;
+    }
+    Ok(total_deleted)
+}
+
+pub async fn cleanup_old_huya_raids(pool: &PgPool) -> Result<u64, AppError> {
+    const BATCH_SIZE: i64 = 5_000;
+    let mut total_deleted = 0_u64;
+    loop {
+        let deleted = sqlx::query(
+            "WITH doomed AS (
+                SELECT ctid
+                FROM huya_raid
+                WHERE status IN ('done', 'cancelled')
+                  AND created_at < NOW() - INTERVAL '30 days'
+                LIMIT $1
+            )
+            DELETE FROM huya_raid
+            WHERE ctid IN (SELECT ctid FROM doomed)",
+        )
+        .bind(BATCH_SIZE)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        total_deleted += deleted;
+        if deleted < BATCH_SIZE as u64 {
+            break;
+        }
+        sleep(Duration::from_millis(120)).await;
+    }
+    Ok(total_deleted)
+}
+
+pub async fn cleanup_old_huya_loot_logs(pool: &PgPool) -> Result<u64, AppError> {
+    const BATCH_SIZE: i64 = 5_000;
+    let mut total_deleted = 0_u64;
+    loop {
+        let deleted = sqlx::query(
+            "WITH doomed AS (
+                SELECT ctid
+                FROM huya_loot_log
+                WHERE created_at < NOW() - INTERVAL '60 days'
+                LIMIT $1
+            )
+            DELETE FROM huya_loot_log
+            WHERE ctid IN (SELECT ctid FROM doomed)",
+        )
+        .bind(BATCH_SIZE)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        total_deleted += deleted;
+        if deleted < BATCH_SIZE as u64 {
+            break;
+        }
+        sleep(Duration::from_millis(120)).await;
+    }
+    Ok(total_deleted)
+}
+
+pub async fn cleanup_old_huya_reforge_logs(pool: &PgPool) -> Result<u64, AppError> {
+    const BATCH_SIZE: i64 = 5_000;
+    let mut total_deleted = 0_u64;
+    loop {
+        let deleted = sqlx::query(
+            "WITH doomed AS (
+                SELECT ctid
+                FROM huya_reforge_log
+                WHERE created_at < NOW() - INTERVAL '60 days'
+                LIMIT $1
+            )
+            DELETE FROM huya_reforge_log
+            WHERE ctid IN (SELECT ctid FROM doomed)",
+        )
+        .bind(BATCH_SIZE)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        total_deleted += deleted;
+        if deleted < BATCH_SIZE as u64 {
+            break;
+        }
+        sleep(Duration::from_millis(120)).await;
+    }
+    Ok(total_deleted)
 }

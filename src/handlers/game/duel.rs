@@ -11,6 +11,7 @@ use crate::db;
 use crate::db::duel as duel_db;
 use crate::db::models::DuelGame;
 use crate::error::AppError;
+use crate::handlers::game::commands::schedule_delete_message;
 use crate::i18n::LOCALE;
 use crate::telegram::topic_routing::{send_text_in_origin_topic, topic_thread_id};
 use crate::telegram::target_resolver::{resolve_target as resolve_target_global, ResolvedTarget};
@@ -1000,7 +1001,8 @@ pub async fn duelstats_handler(
     if let Some(thread) = topic_thread_id(&msg) {
         request = request.message_thread_id(thread);
     }
-    request.await?;
+    let sent = request.await?;
+    schedule_delete_message(bot.clone(), msg.chat.id, sent.id);
     Ok(())
 }
 

@@ -39,3 +39,8 @@ WHERE version = 20260324000300;
 -- Most robust fix: remove the row so the migration can be applied again.
 -- The migration itself is idempotent (uses IF NOT EXISTS).
 DELETE FROM _sqlx_migrations WHERE version = 20260324000400;
+
+-- Fix VersionMismatch for 20260416000000_retention_indexes.sql (SHA384 of current file).
+UPDATE _sqlx_migrations
+SET checksum = decode('f77f7e9df208507fbc353bbc090622e6667b1ef64325b98b838fa28d4c0b6ddfba16a09de29048ccd511b8a115fbd53b', 'hex')
+WHERE version = 20260416000000;

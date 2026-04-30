@@ -5,6 +5,7 @@
 //! Clicks from the non-current player are ignored (handler returns before make_move).
 
 use sqlx::PgPool;
+use tokio::time::{sleep, Duration};
 
 use crate::db::models::DuelGame;
 use crate::error::AppError;
@@ -422,7 +423,7 @@ pub async fn make_move(
 
 pub async fn count_wins(pool: &PgPool, tg_id: i64) -> Result<i64, AppError> {
     let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint FROM duel_game WHERE status = 'finished' AND winner_tg_id = $1",
+        "SELECT COALESCE(SUM(wins), 0)::bigint FROM duel_elo WHERE tg_id = $1",
     )
     .bind(tg_id)
     .fetch_one(pool)
@@ -432,11 +433,7 @@ pub async fn count_wins(pool: &PgPool, tg_id: i64) -> Result<i64, AppError> {
 
 pub async fn count_losses(pool: &PgPool, tg_id: i64) -> Result<i64, AppError> {
     let row: (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(*)::bigint FROM duel_game
-        WHERE status = 'finished' AND winner_tg_id IS NOT NULL
-          AND (player1_tg_id = $1 OR player2_tg_id = $1) AND winner_tg_id != $1
-        "#,
+        "SELECT COALESCE(SUM(losses), 0)::bigint FROM duel_elo WHERE tg_id = $1",
     )
     .bind(tg_id)
     .fetch_one(pool)
@@ -446,10 +443,7 @@ pub async fn count_losses(pool: &PgPool, tg_id: i64) -> Result<i64, AppError> {
 
 pub async fn count_played(pool: &PgPool, tg_id: i64) -> Result<i64, AppError> {
     let row: (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(*)::bigint FROM duel_game
-        WHERE status = 'finished' AND (player1_tg_id = $1 OR player2_tg_id = $1)
-        "#,
+        "SELECT COALESCE(SUM(wins + losses), 0)::bigint FROM duel_elo WHERE tg_id = $1",
     )
     .bind(tg_id)
     .fetch_one(pool)
@@ -601,4 +595,37 @@ pub async fn user_id_by_tg_id(pool: &PgPool, tg_id: i64) -> Result<Option<i32>, 
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| r.0))
+}
+
+pub async fn cleanup_old_duel_games(pool: &PgPool) -> Result<u64, AppError> {
+    const BATCH_SIZE: i64 = 5_000;
+    let mut total_deleted = 0_u64;
+    loop {
+        let deleted = sqlx::query(
+            r#"
+            WITH doomed AS (
+                SELECT ctid
+                FROM duel_game
+                WHERE
+                    (status IN ('cancelled', 'declined', 'pending_accept')
+                     AND created_at < NOW() - INTERVAL '3 days')
+                 OR (status = 'finished'
+                     AND created_at < NOW() - INTERVAL '30 days')
+                LIMIT $1
+            )
+            DELETE FROM duel_game
+            WHERE ctid IN (SELECT ctid FROM doomed)
+            "#,
+        )
+        .bind(BATCH_SIZE)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        total_deleted += deleted;
+        if deleted < BATCH_SIZE as u64 {
+            break;
+        }
+        sleep(Duration::from_millis(120)).await;
+    }
+    Ok(total_deleted)
 }
