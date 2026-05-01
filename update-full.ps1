@@ -11,10 +11,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Server       = "5.189.154.71"
-$User         = "root"
 $RemoteDir    = "/root/sublime-deploy"
-$Target       = "$User@$Server"
+. "$PSScriptRoot\scripts\DeploySshTarget.ps1"
+$Target       = Get-SublimeSshTarget
 $SshOpts      = "-o StrictHostKeyChecking=accept-new"
 $ImageName    = "sublime-bot:latest"
 $ImageTar     = "sublime-bot.tar"

@@ -1,5 +1,7 @@
 # Deploy and update pipeline
 
+New PC or new VPS: see **[NEW_MACHINE_AND_SERVER.md](NEW_MACHINE_AND_SERVER.md)** (SSH, `SUBLIME_SSH_TARGET`, DB move).
+
 ## Quick reference
 
 | Script | When to use |
@@ -12,6 +14,8 @@
 All update scripts need **Telegram token** (param `-TelegramBotToken`, env `TELEGRAM_BOT_TOKEN`, or `config.toml`).  
 Full pipeline scripts also **download the DB backup** into the local `backups/` folder.  
 Use `config.toml.example` as a template; copy to `config.toml` and fill in (do not commit `config.toml`).
+
+**SSH target:** set environment variable `SUBLIME_SSH_TARGET` to `user@host` (e.g. `root@203.0.113.10`) before running any deploy/update script so all `.ps1` files use the same server. Otherwise the default from `scripts/DeploySshTarget.ps1` is used.
 
 ---
 
@@ -119,7 +123,8 @@ A precomputed fix for one common migration is in `scripts/fix_checksum.sql` (see
 
 ## Checks after update
 
-- Containers: `ssh root@5.189.154.71 'docker ps --filter name=sublime'` (sublime-bot and, if used, sublime-watchdog).
-- Main bot logs: `ssh root@5.189.154.71 'docker logs sublime-bot --tail 20'`
+- Containers (replace host or set `SUBLIME_SSH_TARGET` locally):  
+  `ssh root@YOUR_SERVER_IP 'docker ps --filter name=sublime'` (expect `sublime-bot` and, if used, `sublime-watchdog`).
+- Main bot logs: `ssh root@YOUR_SERVER_IP 'docker logs sublime-bot --tail 20'`
 - Watchdog logs (if running): `docker logs sublime-watchdog --tail 20`
 - Commands in Telegram: open the main bot and the notification bot menus and confirm command lists are updated.
