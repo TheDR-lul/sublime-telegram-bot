@@ -25,6 +25,40 @@
 
 ---
 
+## Сборка пакета на текущем сервере (автоматом)
+
+В репозитории есть скрипт **`scripts/export-server-bundle.sh`**. Он создаёт каталог **`/root/server-export-YYYYMMDD_HHMMSS/`** с тем же набором файлов, что описан выше (тома HA/Caddy при наличии, `/opt/home-assistant`, дамп Postgres, том Postgres, архив **`/root/sublime-deploy`** без образа).
+
+**На VPS (из клона репо или после копирования только скрипта):**
+
+```bash
+chmod +x scripts/export-server-bundle.sh
+# опционально: положить и образ бота в папку экспорта (тяжёлый файл ~60MB+)
+COPY_BOT_IMAGE_TAR=1 ./scripts/export-server-bundle.sh
+```
+
+**Переменные окружения (все необязательны):**
+
+| Переменная | Значение по умолчанию | Смысл |
+|------------|----------------------|--------|
+| `SUBLIME_DEPLOY_DIR` | `/root/sublime-deploy` | Каталог с `docker-compose.deploy.yml` |
+| `HA_OPT_DIR` | `/opt/home-assistant` | Bind-mount дерево умного дома |
+| `SKIP_HA_STACK=1` | — | Не архивировать HA/Caddy/smarthome |
+| `SKIP_SUBLIME=1` | — | Не архивировать бота и Postgres |
+| `COPY_BOT_IMAGE_TAR=1` | выкл. | Скопировать `sublime-bot.tar` в папку экспорта, если файл есть |
+
+**Забрать на диск `D:` с Windows:**
+
+```powershell
+$stamp = "20260501_221417"   # подставь дату из имени папки на сервере
+New-Item -ItemType Directory -Force -Path "D:\server-export-$stamp" | Out-Null
+scp -r "root@5.189.154.71:/root/server-export-$stamp/*" "D:\server-export-$stamp\"
+```
+
+IP и пользователя замени на актуальные.
+
+---
+
 ## 0. Подготовка нового VPS
 
 1. **Ubuntu/Debian** (или свой дистрибутив), открытые порты под твои сервисы (часто 80/443 для Caddy, 8123 для HA за прокси или напрямую — как было в `Caddyfile`).

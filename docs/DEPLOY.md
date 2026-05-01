@@ -73,6 +73,7 @@ These live in `scripts/` and are copied to the server by the update scripts.
 - **`remote-backup-db.sh`** – dumps `sublime_bot` DB to `$REMOTE_DIR/backups/sublime_db_backup_YYYYMMDD_HHMMSS.sql`. Run on server: `./remote-backup-db.sh`.
 - **`remote-update.sh`** – backup → load image from tar (or build if `BUILD_ON_SERVER=1`) → `compose up -d` → migrate → commands set. If `.env.watchdog` exists with `NOTIFICATION_BOT_TOKEN`, also sets watchdog menu commands and runs `compose --profile watchdog up -d`. At the end, if present, runs **`notify-update-success.sh`** (sends a success message to `ALERT_CHAT_ID` via the notification bot). Expects `TELEGRAM_BOT_TOKEN` in env or `.env`. Run on server: `cd /root/sublime-deploy && . .env && ./remote-update.sh` or with image tar: `./remote-update.sh` (after copying `sublime-bot.tar`).
 - **`notify-update-success.sh`** – sends a Telegram message (via notification bot) when deploy finished successfully: version, time, host, bot and watchdog container status. Requires `.env.watchdog` with `NOTIFICATION_BOT_TOKEN` and `ALERT_CHAT_ID`. Called automatically by the pipeline and by `remote-update.sh`.
+- **`export-server-bundle.sh`** – on the VPS, builds **`/root/server-export-<stamp>/`** (Home Assistant/Caddy volumes, `/opt/home-assistant`, Postgres dump + volume, `sublime-deploy` tarball, optional `sublime-bot.tar`) for copying to local disk; see **[RESTORE_FROM_LOCAL_SSD_BACKUP.md](RESTORE_FROM_LOCAL_SSD_BACKUP.md)**.
 
 ---
 
