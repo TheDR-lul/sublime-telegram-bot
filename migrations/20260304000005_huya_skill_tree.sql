@@ -1,9 +1,46 @@
--- Rename Tier 1 skill columns to thematic names.
-ALTER TABLE huya RENAME COLUMN skill_atk   TO skill_shaft;
-ALTER TABLE huya RENAME COLUMN skill_def   TO skill_skin;
-ALTER TABLE huya RENAME COLUMN skill_hp    TO skill_balls;
-ALTER TABLE huya RENAME COLUMN skill_luck  TO skill_cunning;
-ALTER TABLE huya RENAME COLUMN skill_regen TO skill_stamina;
+DO $$
+BEGIN
+    -- shaft
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_atk') THEN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_shaft') THEN
+            ALTER TABLE huya DROP COLUMN skill_atk;
+        ELSE
+            ALTER TABLE huya RENAME COLUMN skill_atk TO skill_shaft;
+        END IF;
+    END IF;
+    -- skin
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_def') THEN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_skin') THEN
+            ALTER TABLE huya DROP COLUMN skill_def;
+        ELSE
+            ALTER TABLE huya RENAME COLUMN skill_def TO skill_skin;
+        END IF;
+    END IF;
+    -- balls
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_hp') THEN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_balls') THEN
+            ALTER TABLE huya DROP COLUMN skill_hp;
+        ELSE
+            ALTER TABLE huya RENAME COLUMN skill_hp TO skill_balls;
+        END IF;
+    END IF;
+    -- cunning
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_luck') THEN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_cunning') THEN
+            ALTER TABLE huya DROP COLUMN skill_luck;
+        ELSE
+            ALTER TABLE huya RENAME COLUMN skill_luck TO skill_cunning;
+        END IF;
+    END IF;
+    -- stamina
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_regen') THEN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='huya' AND column_name='skill_stamina') THEN
+            ALTER TABLE huya DROP COLUMN skill_regen;
+        ELSE
+            ALTER TABLE huya RENAME COLUMN skill_regen TO skill_stamina;
+        END IF;
+    END IF;
+END $$;
 
 -- Tier 2: specialisation branches (unlock when T1 parent >= 8).
 ALTER TABLE huya

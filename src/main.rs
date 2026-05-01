@@ -295,9 +295,10 @@ async fn run_migrate(config_path: Option<std::path::PathBuf>) -> Result<(), AppE
         .connect(&cfg.database_url)
         .await?;
 
-    // Fix for checksum mismatches on the server: delete records for old migrations
-    // so that sqlx re-verifies/re-applies them (they use IF NOT EXISTS).
-    let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version < 20260430000000")
+    // Fix for checksum mismatches on the server: delete records for specific old migrations
+    // that were causing issues, so that sqlx re-verifies/re-applies them.
+    // We only target the ones that were restored from Git with different line endings/hashes.
+    let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (20240101000001, 20240101000002, 20260430000000)")
         .execute(&pool)
         .await;
 

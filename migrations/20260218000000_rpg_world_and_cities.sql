@@ -105,7 +105,8 @@ BEGIN
         (v_city_id, 1, 1, 'shop', 'shop_general'),
         (v_city_id, 3, 1, 'healer', 'healer_basic'),
         (v_city_id, 2, 2, 'square', NULL),
-        (v_city_id, 2, 4, 'gate', 'gate_world');
+        (v_city_id, 2, 4, 'gate', 'gate_world')
+    ON CONFLICT (city_id, x, y) DO NOTHING;
 
     -- Small city.
     INSERT INTO rpg_city (code, name, tier, description, map_width, map_height, entry_x, entry_y)
@@ -132,6 +133,7 @@ BEGIN
         (v_city_id, 1, 1, 'tavern', 'tavern_main'),
         (v_city_id, 2, 1, 'guild_house', 'guild_house_main'),
         (v_city_id, 3, 1, 'arena', 'arena_local'),
-        (v_city_id, 2, 4, 'gate', 'gate_world');
+        (v_city_id, 2, 4, 'gate', 'gate_world')
+    ON CONFLICT (city_id, x, y) DO NOTHING;
 END$$;
 
