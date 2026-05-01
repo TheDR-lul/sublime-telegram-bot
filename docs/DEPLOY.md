@@ -2,6 +2,8 @@
 
 New PC or new VPS: see **[NEW_MACHINE_AND_SERVER.md](NEW_MACHINE_AND_SERVER.md)** (SSH, `SUBLIME_SSH_TARGET`, DB move).
 
+Restore from offline bundle copied to your PC disk (e.g. `D:\server-export-*`): **[RESTORE_FROM_LOCAL_SSD_BACKUP.md](RESTORE_FROM_LOCAL_SSD_BACKUP.md)** (Home Assistant + Mosquitto + Caddy + Sublime/Postgres).
+
 ## Quick reference
 
 | Script | When to use |
