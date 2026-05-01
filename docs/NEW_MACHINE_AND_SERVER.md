@@ -49,13 +49,23 @@ Copy-Item config.toml.example config.toml
 **Пример на сессию PowerShell:**
 
 ```powershell
-$env:SUBLIME_SSH_TARGET = "root@YOUR.NEW.SERVER.IP"
+# Текущий прод (дефолт в репозитории):
+$env:SUBLIME_SSH_TARGET = "root@5.189.154.71"
 .\update-full.ps1
+
+# После смены сервера — другой хост, например:
+# $env:SUBLIME_SSH_TARGET = "root@НОВЫЙ_IP"
 ```
 
-**Постоянно для пользователя Windows:** «Переменные среды» → пользовательская переменная `SUBLIME_SSH_TARGET` = `root@...`.
+**Постоянно для пользователя Windows:** «Переменные среды» → пользовательская переменная `SUBLIME_SSH_TARGET`, например `root@5.189.154.71`.
 
-Проверка входа:
+Проверка входа на текущий прод:
+
+```powershell
+ssh root@5.189.154.71 "docker ps --filter name=sublime"
+```
+
+С произвольной целью (если задан override):
 
 ```powershell
 ssh $env:SUBLIME_SSH_TARGET "docker ps --filter name=sublime"
@@ -65,10 +75,10 @@ ssh $env:SUBLIME_SSH_TARGET "docker ps --filter name=sublime"
 
 ## 3. Первичная настройка SSH-ключа (без пароля при каждом деплое)
 
-Один раз (подставь свой `SUBLIME_SSH_TARGET` или отредактируй дефолт в `scripts/DeploySshTarget.ps1`):
+Один раз для текущего прода (`5.189.154.71`) или сразу свой IP через `SUBLIME_SSH_TARGET`:
 
 ```powershell
-$env:SUBLIME_SSH_TARGET = "root@YOUR.NEW.SERVER.IP"
+$env:SUBLIME_SSH_TARGET = "root@5.189.154.71"
 .\deploy.bat ssh-key
 ```
 
@@ -114,7 +124,7 @@ $env:SUBLIME_SSH_TARGET = "root@YOUR.NEW.SERVER.IP"
 
 ## 6. Чеклист после переезда
 
-- [ ] `SUBLIME_SSH_TARGET` или дефолт в `scripts/DeploySshTarget.ps1` указывает на **новый** IP/хост.
+- [ ] `SUBLIME_SSH_TARGET` или дефолт в `scripts/DeploySshTarget.ps1` указывает на нужный хост (сейчас по умолчанию прод **`5.189.154.71`**).
 - [ ] `config.toml` на ПК и `.env` на сервере заполнены, не в Git.
 - [ ] `ssh ... docker ps` показывает `sublime-bot` (и при необходимости `sublime-watchdog`).
 - [ ] В Telegram бот отвечает; при использовании watchdog — проверка алертов.

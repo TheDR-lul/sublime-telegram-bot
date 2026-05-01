@@ -15,7 +15,7 @@ All update scripts need **Telegram token** (param `-TelegramBotToken`, env `TELE
 Full pipeline scripts also **download the DB backup** into the local `backups/` folder.  
 Use `config.toml.example` as a template; copy to `config.toml` and fill in (do not commit `config.toml`).
 
-**SSH target:** set environment variable `SUBLIME_SSH_TARGET` to `user@host` (e.g. `root@203.0.113.10`) before running any deploy/update script so all `.ps1` files use the same server. Otherwise the default from `scripts/DeploySshTarget.ps1` is used.
+**SSH target:** переменная `SUBLIME_SSH_TARGET` = `user@host` переопределяет сервер для всех `.ps1`. Если не задана — дефолт **`root@5.189.154.71`** (см. `scripts/DeploySshTarget.ps1`).
 
 ---
 
@@ -123,8 +123,11 @@ A precomputed fix for one common migration is in `scripts/fix_checksum.sql` (see
 
 ## Checks after update
 
-- Containers (replace host or set `SUBLIME_SSH_TARGET` locally):  
-  `ssh root@YOUR_SERVER_IP 'docker ps --filter name=sublime'` (expect `sublime-bot` and, if used, `sublime-watchdog`).
-- Main bot logs: `ssh root@YOUR_SERVER_IP 'docker logs sublime-bot --tail 20'`
+**Текущий VPS (совпадает с дефолтом в `scripts/DeploySshTarget.ps1`):** `root@5.189.154.71`.
+
+- Containers: `ssh root@5.189.154.71 'docker ps --filter name=sublime'` (ожидай `sublime-bot` и при необходимости `sublime-watchdog`).
+- Main bot logs: `ssh root@5.189.154.71 'docker logs sublime-bot --tail 20'`
+
+Если на ПК выставлен `SUBLIME_SSH_TARGET` на другой хост — выполняй те же команды с этим `user@host` вместо `root@5.189.154.71`.
 - Watchdog logs (if running): `docker logs sublime-watchdog --tail 20`
 - Commands in Telegram: open the main bot and the notification bot menus and confirm command lists are updated.
